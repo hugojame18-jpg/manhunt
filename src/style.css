@@ -1,0 +1,313 @@
+:root {
+  --fond: #0f172a;
+  --carton: #1e293b;
+  --bord: #334155;
+  --texte: #f8fafc;
+  --doux: #cbd5e1;
+  --vert: #22c55e;
+  --rouge: #dc2626;
+  --violet: #7c3aed;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 17px;
+  color: var(--texte);
+  background: var(--fond);
+  -webkit-text-size-adjust: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100dvh;
+}
+
+.page {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.page.jeu {
+  height: 100dvh;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  gap: 0;
+  max-width: none;
+}
+
+.centre {
+  text-align: center;
+  align-items: center;
+}
+
+h1 {
+  font-size: 2.2rem;
+  margin: 24px 0 0;
+  text-align: center;
+}
+
+h2 {
+  font-size: 1.1rem;
+  margin: 4px 0 8px;
+}
+
+.sous-titre {
+  text-align: center;
+  color: var(--doux);
+  margin: 0 0 8px;
+}
+
+.carton {
+  background: var(--carton);
+  border: 1px solid var(--bord);
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-weight: 600;
+  flex: 1;
+}
+
+input,
+select {
+  font-size: 17px; /* ≥ 16 px : évite le zoom automatique de Safari */
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--bord);
+  background: #0b1222;
+  color: var(--texte);
+  width: 100%;
+}
+
+input[type='range'] {
+  padding: 0;
+  min-height: 36px;
+}
+
+.code-input {
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  font-weight: 700;
+  text-align: center;
+}
+
+button {
+  font-size: 17px;
+  font-weight: 700;
+  min-height: 48px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: none;
+  background: var(--vert);
+  color: #052e16;
+  cursor: pointer;
+  width: 100%;
+}
+
+button:disabled {
+  opacity: 0.4;
+}
+
+button.secondaire {
+  background: transparent;
+  color: var(--texte);
+  border: 2px solid var(--bord);
+}
+
+button.danger,
+button.rouge {
+  background: var(--rouge);
+  color: white;
+}
+
+button.violet {
+  background: var(--violet);
+  color: white;
+}
+
+button.mini {
+  min-height: 44px;
+  width: auto;
+  padding: 6px 12px;
+  font-size: 15px;
+}
+
+button.lien {
+  background: none;
+  color: var(--doux);
+  text-decoration: underline;
+  width: auto;
+  font-weight: 500;
+}
+
+.ligne {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  width: 100%;
+}
+
+.code {
+  font-size: 3rem;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.petit {
+  font-size: 0.85rem;
+  color: var(--doux);
+  margin: 0;
+}
+
+.aide {
+  color: var(--doux);
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.erreur {
+  color: #fecaca;
+  background: #450a0a;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 0;
+}
+
+.liste {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.liste li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--bord);
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+}
+
+.badge {
+  font-size: 0.75rem;
+  background: var(--bord);
+  border-radius: 6px;
+  padding: 2px 6px;
+  margin-left: 6px;
+}
+
+.pastille {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.entete {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--carton);
+  border-bottom: 1px solid var(--bord);
+}
+
+.entete .droite {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.chrono {
+  font-size: 1.6rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.role {
+  font-weight: 700;
+}
+
+.bandeau {
+  padding: 10px 14px;
+  background: var(--bord);
+  font-weight: 600;
+}
+
+.bandeau.rouge {
+  background: var(--rouge);
+  color: white;
+}
+
+.bandeau.jaune {
+  background: #facc15;
+  color: #1c1917;
+}
+
+.bandeau.violet {
+  background: var(--violet);
+  color: white;
+  border-radius: 10px;
+}
+
+.bandeau.gros {
+  font-size: 1.15rem;
+  text-align: center;
+}
+
+.panneau .bandeau.rouge {
+  border-radius: 10px;
+}
+
+.carte {
+  flex: 1;
+  min-height: 260px;
+  width: 100%;
+  background: #cbd5e1;
+}
+
+.panneau {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--fond);
+  max-height: 45dvh;
+  overflow-y: auto;
+}
+
+.page.jeu > .aide {
+  padding: 8px 14px;
+}
+
+.etiquette {
+  font-weight: 700;
+  font-size: 14px;
+}

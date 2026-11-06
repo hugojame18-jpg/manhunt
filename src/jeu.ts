@@ -47,6 +47,8 @@ export interface Joueur {
   derniere_at: string | null
   dernier_dehors: boolean
   hotspot_courant: number | null
+  points: number
+  points_palier: number
   created_at: string
 }
 
@@ -78,6 +80,23 @@ export interface PositionDatee extends LatLng {
 }
 
 export const MAX_JOUEURS = 16
+/** Points des runners toutes les 10 s selon la distance au chasseur le plus proche (même barème que le serveur). */
+export const PALIERS_POINTS: { distance: number; points: number }[] = [
+  { distance: 50, points: 10 },
+  { distance: 100, points: 5 },
+  { distance: 200, points: 2 },
+  { distance: 500, points: 1 },
+]
+
+export function palierPoints(distance: number | null): number {
+  if (distance === null) return 0
+  return PALIERS_POINTS.find((p) => distance < p.distance)?.points ?? 0
+}
+
+/** Classement des runners par points (les attrapés gardent leurs points). */
+export function classementRunners(joueurs: Joueur[]): Joueur[] {
+  return joueurs.filter((j) => (j.role_initial ?? j.role) === 'runner').sort((a, b) => b.points - a.points)
+}
 export const RAYON_HOTSPOT_M = 30
 export const DUREE_LOCALISATION_MS = 60_000
 export const DELAI_DIRECT_MS = 30_000

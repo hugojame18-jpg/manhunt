@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Crosshair, LogIn, Plus, Smartphone, WifiOff } from 'lucide-react'
+import { BookOpen, Crosshair, WifiOff } from 'lucide-react'
 import { creerPartie, rejoindrePartie, terminerPartie } from './api'
 import { Jeu } from './EnJeu'
 import { useEtatPartie, useMaintenant } from './hooks'
 import { estTerminee } from './jeu'
 import { Lobby } from './Lobby'
 import { Recap } from './Recap'
-import { MessageErreur, Spinner, useAction } from './ui'
+import { FeuilleRegles, MessageErreur, Section, Spinner, useAction } from './ui'
 
 interface Session {
   partieId: string
@@ -52,9 +52,9 @@ function EcranPartie({ session, onQuitter }: { session: Session; onQuitter: () =
   if (!etat) {
     return (
       <div className="page page-centre">
-        {erreur ? <WifiOff size={36} aria-hidden /> : <Spinner taille={32} />}
+        {erreur ? <WifiOff size={40} aria-hidden /> : <Spinner taille={32} />}
         <p className="aide">{erreur ? `Connexion impossible : ${erreur}` : 'Connexion à la partie…'}</p>
-        <button className="btn btn-secondaire" onClick={onQuitter}>
+        <button className="btn btn-gris" onClick={onQuitter}>
           Retour à l'accueil
         </button>
       </div>
@@ -64,7 +64,7 @@ function EcranPartie({ session, onQuitter }: { session: Session; onQuitter: () =
     return (
       <div className="page page-centre">
         <h2>{!partie ? "Cette partie n'existe plus" : 'Tu as été retiré de la partie'}</h2>
-        <button className="btn btn-primaire" onClick={onQuitter}>
+        <button className="btn btn-plein" onClick={onQuitter}>
           Retour à l'accueil
         </button>
       </div>
@@ -109,31 +109,37 @@ function Accueil({ onEntrer }: { onEntrer: (s: Session) => void }) {
   const codeUrl = new URLSearchParams(location.search).get('code') ?? ''
   const [code, setCode] = useState(codeUrl.toUpperCase())
   const [pseudo, setPseudo] = useState(() => localStorage.getItem('manhunt-pseudo') ?? '')
-  const rejoindre = useAction()
-  const creer = useAction()
+  const [regles, setRegles] = useState(false)
+  const { occupe, erreur, setErreur, lancer } = useAction()
+  const [action, setAction] = useState<'rejoindre' | 'creer' | null>(null)
 
   const pseudoValide = (): string | null => {
     const p = pseudo.trim()
-    if (p.length < 2) return null
+    if (p.length < 2) {
+      setErreur('Choisis un pseudo (2 caractères minimum).')
+      return null
+    }
     localStorage.setItem('manhunt-pseudo', p)
     return p
   }
 
-  const surRejoindre = () => {
+  const rejoindre = () => {
     const p = pseudoValide()
-    if (!p) return rejoindre.setErreur('Choisis un pseudo (2 caractères minimum).')
-    if (code.trim().length !== 6) return rejoindre.setErreur('Le code de la partie fait 6 caractères.')
-    void rejoindre.lancer(async () => {
+    if (!p) return
+    if (code.trim().length !== 6) return setErreur('Le code de la partie fait 6 caractères.')
+    setAction('rejoindre')
+    void lancer(async () => {
       const { partie, joueur } = await rejoindrePartie(code.trim().toUpperCase(), p)
       history.replaceState(null, '', location.pathname)
       onEntrer({ partieId: partie.id, joueurId: joueur.id })
     })
   }
 
-  const surCreer = () => {
+  const creer = () => {
     const p = pseudoValide()
-    if (!p) return creer.setErreur('Choisis un pseudo (2 caractères minimum).')
-    void creer.lancer(async () => {
+    if (!p) return
+    setAction('creer')
+    void lancer(async () => {
       const centre = await positionRapide()
       const { partie, joueur } = await creerPartie(p, centre)
       onEntrer({ partieId: partie.id, joueurId: joueur.id })
@@ -142,64 +148,60 @@ function Accueil({ onEntrer }: { onEntrer: (s: Session) => void }) {
 
   return (
     <div className="page">
+      {regles && <FeuilleRegles onFermer={() => setRegles(false)} />}
       <header className="hero">
-        <div className="radar" aria-hidden />
-        <div className="logo">
-          <Crosshair size={38} strokeWidth={2.2} aria-hidden />
+        <div className="hero-icone">
+          <Crosshair size={48} strokeWidth={2.2} aria-hidden />
         </div>
         <h1>Manhunt</h1>
         <p>La chasse à l'homme entre potes</p>
       </header>
 
-      <section className="bloc">
-        <label className="champ">
-          <span>Ton pseudo</span>
-          <input value={pseudo} onChange={(e) => setPseudo(e.target.value)} maxLength={20} placeholder="Ex. Léo" autoComplete="nickname" />
-        </label>
-      </section>
-
       <form
-        className="bloc"
+        className="section"
+        style={{ gap: 22 }}
         onSubmit={(e) => {
           e.preventDefault()
-          surRejoindre()
+          rejoindre()
         }}
       >
-        <div className="bloc-titre">
-          <h2>Rejoindre une partie</h2>
+        <Section titre="Ton pseudo">
+          <label className="ligne">
+            <input className="champ-ligne" value={pseudo} onChange={(e) => setPseudo(e.target.value)} maxLength={20} placeholder="Ex. Léo" autoComplete="nickname" aria-label="Ton pseudo" />
+          </label>
+        </Section>
+        <Section titre="Code de la partie" pied="Demande le code à celui qui a créé la partie.">
+          <label className="ligne">
+            <input
+              className="champ-ligne champ-code"
+              value={code}
+              onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+              maxLength={6}
+              autoCapitalize="characters"
+              autoCorrect="off"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="ABC123"
+              aria-label="Code de la partie"
+            />
+          </label>
+        </Section>
+        <MessageErreur>{erreur}</MessageErreur>
+        <div className="section" style={{ gap: 10 }}>
+          <button type="submit" className="btn btn-plein" disabled={occupe}>
+            {occupe && action === 'rejoindre' && <Spinner />}
+            Rejoindre la partie
+          </button>
+          <button type="button" className="btn btn-teinte" onClick={creer} disabled={occupe}>
+            {occupe && action === 'creer' && <Spinner />}
+            Créer une partie
+          </button>
         </div>
-        <label className="champ champ-code">
-          <span>Code de la partie</span>
-          <input
-            value={code}
-            onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
-            maxLength={6}
-            autoCapitalize="characters"
-            autoCorrect="off"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="······"
-          />
-        </label>
-        <MessageErreur>{rejoindre.erreur}</MessageErreur>
-        <button type="submit" className="btn btn-primaire" disabled={rejoindre.occupe}>
-          {rejoindre.occupe ? <Spinner /> : <LogIn size={20} aria-hidden />}
-          Rejoindre
-        </button>
       </form>
 
-      <div className="separateur">ou</div>
-
-      <MessageErreur>{creer.erreur}</MessageErreur>
-      <button className="btn btn-secondaire" onClick={surCreer} disabled={creer.occupe}>
-        {creer.occupe ? <Spinner /> : <Plus size={20} aria-hidden />}
-        Créer une partie
+      <button className="btn-lien" style={{ alignSelf: 'center', marginTop: 'auto' }} onClick={() => setRegles(true)}>
+        <BookOpen size={18} aria-hidden /> Comment jouer ?
       </button>
-
-      <p className="note" style={{ marginTop: 'auto' }}>
-        <Smartphone size={18} aria-hidden />
-        Pendant la partie, garde Safari ouvert. Le mode poche éteint l'écran sans couper la position.
-      </p>
     </div>
   )
 }

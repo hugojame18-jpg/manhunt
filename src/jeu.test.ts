@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { Evenement, Joueur, Partie, Point, PositionDatee } from './jeu'
 import {
+  classementRunners,
   dansPolygone,
+  palierPoints,
   derniersPings,
   enAvance,
   estTerminee,
@@ -68,6 +70,8 @@ function joueur(id: string, role: Joueur['role'], extra: Partial<Joueur> = {}): 
     derniere_at: null,
     dernier_dehors: false,
     hotspot_courant: null,
+    points: 0,
+    points_palier: 0,
     created_at: '',
     ...extra,
   }
@@ -169,5 +173,25 @@ describe('jokers et pings', () => {
     const dehors = { ...leo, dernier_dehors: true, derniere_lat: 48.86, derniere_lng: 2.35, derniere_at: new Date(debut + 10 * min).toISOString() }
     expect(runnersEnDirect(partie, [dehors], debut + 10 * min + 5000)).toHaveLength(1)
     expect(runnersEnDirect({ ...partie, limite_dehors: false }, [dehors], debut + 10 * min + 5000)).toHaveLength(0)
+  })
+})
+
+describe('points des runners', () => {
+  it('barème selon la distance au chasseur le plus proche', () => {
+    expect(palierPoints(30)).toBe(10)
+    expect(palierPoints(50)).toBe(5)
+    expect(palierPoints(150)).toBe(2)
+    expect(palierPoints(499)).toBe(1)
+    expect(palierPoints(500)).toBe(0)
+    expect(palierPoints(null)).toBe(0)
+  })
+  it('classement des runners, attrapés compris, par points décroissants', () => {
+    const liste = [
+      joueur('a', 'runner', { points: 12 }),
+      joueur('b', 'runner', { points: 40, statut: 'attrape' }),
+      joueur('c', 'chasseur', { points: 0 }),
+      joueur('d', 'chasseur', { role_initial: 'runner', points: 25 }),
+    ]
+    expect(classementRunners(liste).map((j) => j.id)).toEqual(['b', 'd', 'a'])
   })
 })

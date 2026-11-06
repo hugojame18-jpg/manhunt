@@ -16,6 +16,7 @@ Chasse à l'homme entre potes, dans le navigateur (pensé pour Safari sur iPhone
 - **Modes** : *Classique* (un runner attrapé est éliminé) ou *Infection* (un runner attrapé devient chasseur). La partie se termine quand tous les runners sont attrapés, ou à la fin du temps (victoire des runners s'il en reste).
 - **Avance des runners** : au lancement, les runners ont quelques minutes pour fuir. Les pings démarrent après.
 - **Pings** : toutes les N minutes, les chasseurs voient la position des runners à ce moment-là.
+- **Points des runners** : toutes les 10 s (après l'avance), un runner encore en jeu marque des points selon la distance du chasseur le plus proche : moins de 50 m = 10 pts, moins de 100 m = 5, moins de 200 m = 2, moins de 500 m = 1, au-delà = 0. Calcul fait par le serveur. Un runner attrapé garde ses points mais n'en marque plus. Le récap affiche le classement des runners.
 - **Joker chasseur** : ping réel immédiat du runner choisi, visible par tous les chasseurs.
 - **Joker runner** : le runner choisit sur la carte une fausse position (n’importe où dans la zone) ; au prochain ping, les chasseurs le voient là. Nombre de jokers réglé dans le salon (1 par défaut).
 - **Zone de jeu** (facultative) : polygone dessiné sur la carte par l'hôte.

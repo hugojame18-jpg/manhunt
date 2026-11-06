@@ -1,29 +1,52 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   ArrowLeftRight,
   Biohazard,
+  BookOpen,
   Check,
   Copy,
   Crown,
+  Ellipsis,
   Flame,
-  Info,
-  LogOut,
+  Hourglass,
   Map as IconeCarte,
   Minus,
   Play,
   Plus,
+  Radar,
   Share,
   ShieldX,
+  Timer,
   Trash2,
+  TriangleAlert,
   Undo2,
+  UserMinus,
+  VenetianMask,
   X,
+  Zap,
 } from 'lucide-react'
 import { changerRole, lancerPartie, modifierPartie, retirerJoueur, type ReglagesPartie } from './api'
-import { Carte, type Hotspot } from './Carte'
+import { Carte } from './Carte'
 import { useGeoloc } from './hooks'
 import type { Evenement, Joueur, LatLng, Partie, Point, Role } from './jeu'
 import { MAX_JOUEURS, aUneZone, centrePartie, distanceM, peutLancer } from './jeu'
-import { Avatar, COULEUR_ROLE, ICONE_ROLE, MessageErreur, NOM_ROLE, Spinner, useAction, useConfirm, type OptionsConfirm } from './ui'
+import {
+  Avatar,
+  COULEUR_ROLE,
+  Feuille,
+  FeuilleRegles,
+  ICONE_ROLE,
+  Interrupteur,
+  Ligne,
+  MessageErreur,
+  NOM_ROLE,
+  Section,
+  Segmente,
+  Spinner,
+  useAction,
+  useConfirm,
+  useMenu,
+} from './ui'
 
 export interface PropsEcran {
   partie: Partie
@@ -36,46 +59,33 @@ export interface PropsEcran {
 }
 
 const DESCRIPTION_ROLE: Record<Role, string> = {
-  runner: 'Fuis et reste caché',
-  chasseur: 'Traque les runners',
+  runner: 'Tu te caches. Frôle les chasseurs sans te faire prendre pour marquer des points.',
+  chasseur: 'Tu traques les runners grâce aux pings et à tes jokers.',
 }
 
 const DESCRIPTION_MODE = {
-  classique: 'Les runners attrapés sont éliminés. La partie se termine quand tous les runners sont attrapés.',
-  infection: 'Les runners attrapés deviennent chasseurs. La partie se termine quand tous les runners sont attrapés.',
+  classique: 'Un runner attrapé est éliminé. La partie se termine quand tous les runners sont attrapés.',
+  infection: 'Un runner attrapé devient chasseur. La partie se termine quand tous les runners sont attrapés.',
 }
 
-export const INFOS: Record<string, Omit<OptionsConfirm, 'confirmer'>> = {
-  jokerChasseur: {
-    titre: 'Joker chasseur',
-    message:
-      "Un joker force immédiatement un ping réel du runner choisi, sans attendre l'intervalle normal. Tous les chasseurs voient ce ping.",
-  },
-  jokerRunner: {
-    titre: 'Joker runner',
-    message:
-      'Un joker permet au runner de choisir sur la carte une fausse position (dans la zone) : au prochain ping, les chasseurs le verront là au lieu de sa vraie position.',
-  },
-  avance: {
-    titre: 'Avance des runners',
-    message: 'Au lancement, les runners ont ce temps pour s’enfuir avant que la chasse commence. Les pings démarrent après.',
-  },
-  hotspots: {
-    titre: 'Hotspots',
-    message:
-      'Tant qu’un runner reste dans un hotspot, les chasseurs reçoivent un ping de lui toutes les 2 minutes et le runner gagne un joker. Les chasseurs ne voient un hotspot que lorsqu’un runner est dedans.',
-  },
-  dehors: {
-    titre: 'Temps limite hors zone',
-    message:
-      'Les runners hors de la zone sont visibles en direct par les chasseurs. Une fois le temps autorisé (cumulé) écoulé, le runner est considéré comme attrapé.',
-  },
+type CleNombre = 'duree_min' | 'intervalle_min' | 'avance_min' | 'jokers_chasseur' | 'jokers_runner'
+type CleReglage = CleNombre | 'mode' | 'dehors'
+
+const NOMBRES: Record<CleNombre, { titre: string; unite?: string; min: number; max: (p: Partie) => number; pas: number; aide: string }> = {
+  duree_min: { titre: 'Durée de la partie', unite: 'min', min: 5, max: () => 180, pas: 5, aide: 'Temps de chasse, sans compter l’avance des runners.' },
+  intervalle_min: { titre: 'Intervalle des pings', unite: 'min', min: 1, max: (p) => Math.min(30, p.duree_min - 1), pas: 1, aide: 'Toutes les combien de minutes les chasseurs voient la position des runners.' },
+  avance_min: { titre: 'Avance des runners', unite: 'min', min: 0, max: () => 15, pas: 1, aide: 'Au lancement, les runners ont ce temps pour s’enfuir avant que la chasse commence. Les pings démarrent après.' },
+  jokers_chasseur: { titre: 'Jokers par chasseur', min: 0, max: () => 10, pas: 1, aide: 'Un joker révèle tout de suite la vraie position du runner choisi, à tous les chasseurs.' },
+  jokers_runner: { titre: 'Jokers par runner', min: 0, max: () => 10, pas: 1, aide: 'Un joker permet de choisir sur la carte une fausse position : au prochain ping, les chasseurs le verront là.' },
 }
 
 export function Lobby({ partie, joueurs, moi, recharger, onQuitter }: PropsEcran) {
   const { occupe, erreur, setErreur, lancer } = useAction()
-  const [modal, confirmer] = useConfirm()
+  const [confirmation, confirmer] = useConfirm()
+  const [menu, ouvrirMenu] = useMenu()
   const [copie, setCopie] = useState(false)
+  const [regles, setRegles] = useState(false)
+  const [reglage, setReglage] = useState<CleReglage | null>(null)
   const [editeur, setEditeur] = useState<'zone' | 'hotspots' | null>(null)
   const [brouillon, setBrouillon] = useState<ReglagesPartie>({})
   const versions = useRef(new Map<string, number>())
@@ -104,8 +114,6 @@ export function Lobby({ partie, joueurs, moi, recharger, onQuitter }: PropsEcran
         }),
       )
   }
-
-  const info = (cle: keyof typeof INFOS) => void confirmer({ ...INFOS[cle], confirmer: 'OK', info: true, icone: Info })
 
   const agir = (action: () => Promise<void>) =>
     lancer(async () => {
@@ -136,20 +144,23 @@ export function Lobby({ partie, joueurs, moi, recharger, onQuitter }: PropsEcran
       titre: 'Quitter la partie ?',
       message: admin ? 'Tu es l’hôte : la partie restera en attente sans toi.' : 'Tu pourras revenir avec le même code et le même pseudo.',
       confirmer: 'Quitter',
-      ton: 'danger',
-      icone: LogOut,
+      danger: true,
     })
     if (!ok) return
     if (!admin) void retirerJoueur(moi.id).catch(() => undefined)
     onQuitter()
   }
 
-  const retirer = async (j: Joueur) => {
-    const ok = await confirmer({ titre: `Retirer ${j.pseudo} ?`, message: 'Il pourra revenir avec le code.', confirmer: 'Retirer', ton: 'danger', icone: X })
-    if (ok) void agir(() => retirerJoueur(j.id))
+  const menuJoueur = (j: Joueur) => {
+    const autre: Role = j.role === 'runner' ? 'chasseur' : 'runner'
+    ouvrirMenu({
+      titre: j.pseudo,
+      actions: [
+        { label: `Passer en ${NOM_ROLE[autre].toLowerCase()}`, icone: ArrowLeftRight, onClick: () => void agir(() => changerRole(j.id, autre)) },
+        { label: 'Retirer de la partie', icone: UserMinus, danger: true, onClick: () => void agir(() => retirerJoueur(j.id)) },
+      ],
+    })
   }
-
-  const hotspotsCarte = useMemo<Hotspot[]>(() => r.hotspots.map(([lat, lng]) => ({ pos: { lat, lng } })), [r.hotspots])
 
   if (editeur) {
     return (
@@ -165,204 +176,128 @@ export function Lobby({ partie, joueurs, moi, recharger, onQuitter }: PropsEcran
     )
   }
 
+  const ouvrir = (cle: CleReglage) => (admin ? () => setReglage(cle) : undefined)
+  const zone = aUneZone(r)
+
   return (
     <div className="page">
-      {modal}
-      <div className="barre-haut">
+      {confirmation}
+      {menu}
+      {regles && <FeuilleRegles onFermer={() => setRegles(false)} />}
+      {reglage && <FeuilleReglage cle={reglage} partie={r} regler={regler} onFermer={() => setReglage(null)} />}
+
+      <header className="entete">
         <h1>Salon</h1>
-        <button className="btn-icone discret" onClick={() => void quitter()} aria-label="Quitter la partie">
-          <LogOut size={20} aria-hidden />
+        <button className="btn-lien rouge" onClick={() => void quitter()}>
+          Quitter
         </button>
-      </div>
+      </header>
 
       <section className="carte-code" aria-label="Code de la partie">
-        <span className="surtitre">Code de la partie</span>
+        <small>Code de la partie</small>
         <div className="cases" aria-label={partie.code}>
           {Array.from(partie.code).map((c, i) => (
             <span key={i}>{c}</span>
           ))}
         </div>
         <div className="rangee">
-          <button className="btn btn-clair btn-petit" style={{ flex: 1 }} onClick={() => void copier()}>
-            {copie ? <Check size={18} aria-hidden /> : <Copy size={18} aria-hidden />}
+          {'share' in navigator && (
+            <button className="btn btn-blanc btn-petit" onClick={() => void partager()}>
+              <Share size={17} aria-hidden /> Inviter
+            </button>
+          )}
+          <button className="btn btn-blanc btn-petit" onClick={() => void copier()}>
+            {copie ? <Check size={17} aria-hidden /> : <Copy size={17} aria-hidden />}
             {copie ? 'Copié' : 'Copier'}
           </button>
-          {'share' in navigator && (
-            <button className="btn btn-clair btn-petit" style={{ flex: 1 }} onClick={() => void partager()}>
-              <Share size={18} aria-hidden />
-              Inviter
-            </button>
-          )}
         </div>
       </section>
 
-      {joueurs.length < 2 && (
-        <p className="note">
-          <Info size={18} aria-hidden />
-          Tu es seul dans le salon. Partage le code pour que tes potes rejoignent. Il faut au moins un chasseur et un runner.
-        </p>
-      )}
-
-      <section className="bloc">
-        <div className="bloc-titre">
-          <h2>Ton rôle</h2>
+      <Section titre="Ton rôle" pied={DESCRIPTION_ROLE[moi.role]}>
+        <div className="ligne">
+          <div style={{ flex: 1 }}>
+            <Segmente<Role>
+              label="Ton rôle"
+              valeur={moi.role}
+              onChange={(role) => role !== moi.role && void agir(() => changerRole(moi.id, role))}
+              options={[
+                { valeur: 'runner', label: 'Runner', icone: ICONE_ROLE.runner },
+                { valeur: 'chasseur', label: 'Chasseur', icone: ICONE_ROLE.chasseur },
+              ]}
+            />
+          </div>
         </div>
-        <div className="tuiles" role="radiogroup" aria-label="Ton rôle">
-          {(['runner', 'chasseur'] as const).map((role) => {
-            const Icone = ICONE_ROLE[role]
-            const actif = moi.role === role
-            return (
-              <button
-                key={role}
-                role="radio"
-                aria-checked={actif}
-                className={`tuile${actif ? ' actif' : ''}`}
-                style={{ ['--c' as string]: COULEUR_ROLE[role] }}
-                onClick={() => !actif && void agir(() => changerRole(moi.id, role))}
-              >
-                <span className="tuile-icone">
-                  <Icone size={22} aria-hidden />
+      </Section>
+
+      <Section
+        titre="Joueurs"
+        droite={`${joueurs.length}/${MAX_JOUEURS}`}
+        pied={joueurs.length < 2 ? 'Tu es seul : touche « Inviter » pour envoyer le lien à tes potes.' : `${nbChasseurs} chasseur${nbChasseurs > 1 ? 's' : ''} · ${nbRunners} runner${nbRunners > 1 ? 's' : ''}`}
+      >
+        {joueurs.map((j) => {
+          const Icone = ICONE_ROLE[j.role]
+          return (
+            <div className="ligne avec-avatar" key={j.id}>
+              <Avatar nom={j.pseudo} couleur={COULEUR_ROLE[j.role]} />
+              <div className="ligne-corps">
+                <span className="ligne-titre">
+                  {j.pseudo}
+                  {j.id === partie.admin_id && (
+                    <span className="badge jaune">
+                      <Crown size={11} aria-hidden /> Hôte
+                    </span>
+                  )}
+                  {j.id === moi.id && <span className="badge">Toi</span>}
                 </span>
-                <strong>{NOM_ROLE[role]}</strong>
-                <small>{DESCRIPTION_ROLE[role]}</small>
-                {actif && (
-                  <span className="coche">
-                    <Check size={15} strokeWidth={3} aria-hidden />
-                  </span>
-                )}
-              </button>
-            )
-          })}
-        </div>
-      </section>
+                <span className="ligne-sous" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: COULEUR_ROLE[j.role] }}>
+                  <Icone size={13} aria-hidden /> {NOM_ROLE[j.role]}
+                </span>
+              </div>
+              {admin && j.id !== moi.id && (
+                <button className="btn-icone" onClick={() => menuJoueur(j)} aria-label={`Options pour ${j.pseudo}`}>
+                  <Ellipsis size={20} aria-hidden />
+                </button>
+              )}
+            </div>
+          )
+        })}
+      </Section>
 
-      <section className="bloc">
-        <div className="bloc-titre">
-          <h2>Joueurs</h2>
-          <span>
-            {nbChasseurs} chasseur{nbChasseurs > 1 ? 's' : ''} · {nbRunners} runner{nbRunners > 1 ? 's' : ''} · {joueurs.length}/{MAX_JOUEURS}
-          </span>
-        </div>
-        <ul className="liste">
-          {joueurs.map((j) => {
-            const Icone = ICONE_ROLE[j.role]
-            return (
-              <li key={j.id}>
-                <Avatar nom={j.pseudo} couleur={COULEUR_ROLE[j.role]} />
-                <div className="corps">
-                  <span className="nom">
-                    {j.pseudo}
-                    {j.id === partie.admin_id && (
-                      <span className="badge or">
-                        <Crown size={12} aria-hidden /> Hôte
-                      </span>
-                    )}
-                    {j.id === moi.id && <span className="badge">Toi</span>}
-                  </span>
-                  <span className="sous" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: COULEUR_ROLE[j.role] }}>
-                    <Icone size={14} aria-hidden /> {NOM_ROLE[j.role]}
-                  </span>
-                </div>
-                {admin && j.id !== moi.id && (
-                  <div className="droite">
-                    <button
-                      className="btn-icone discret"
-                      aria-label={`Passer ${j.pseudo} en ${j.role === 'runner' ? 'chasseur' : 'runner'}`}
-                      onClick={() => void agir(() => changerRole(j.id, j.role === 'runner' ? 'chasseur' : 'runner'))}
-                    >
-                      <ArrowLeftRight size={18} aria-hidden />
-                    </button>
-                    <button className="btn-icone discret danger" aria-label={`Retirer ${j.pseudo}`} onClick={() => void retirer(j)}>
-                      <X size={18} aria-hidden />
-                    </button>
-                  </div>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      </section>
+      <Section titre="Partie" pied={admin ? 'Touche un réglage pour le modifier.' : `Réglages choisis par ${nomAdmin}.`}>
+        <Ligne icone={r.mode === 'classique' ? ShieldX : Biohazard} couleur="var(--indigo)" titre="Mode" valeur={r.mode === 'classique' ? 'Classique' : 'Infection'} onClick={ouvrir('mode')} />
+        <Ligne icone={Timer} couleur="var(--bleu)" titre="Durée" valeur={`${r.duree_min} min`} onClick={ouvrir('duree_min')} />
+        <Ligne icone={Radar} couleur="var(--bleu)" titre="Pings" valeur={`toutes les ${r.intervalle_min} min`} onClick={ouvrir('intervalle_min')} />
+        <Ligne icone={Hourglass} couleur="var(--vert)" titre="Avance des runners" valeur={r.avance_min ? `${r.avance_min} min` : 'Aucune'} onClick={ouvrir('avance_min')} />
+        <Ligne icone={Zap} couleur="var(--rouge)" titre="Jokers chasseur" valeur={r.jokers_chasseur} onClick={ouvrir('jokers_chasseur')} />
+        <Ligne icone={VenetianMask} couleur="var(--violet)" titre="Jokers runner" valeur={r.jokers_runner} onClick={ouvrir('jokers_runner')} />
+      </Section>
 
-      <section className="bloc">
-        <div className="bloc-titre">
-          <h2>Réglages</h2>
-          {!admin && <span>Définis par {nomAdmin}</span>}
-        </div>
+      <Section titre="Terrain" pied={zone ? undefined : 'Sans zone, on joue partout : la limite hors zone est alors désactivée.'}>
+        <Ligne icone={IconeCarte} couleur="var(--vert)" titre="Zone de jeu" valeur={zone ? 'Dessinée' : 'Aucune'} onClick={admin ? () => setEditeur('zone') : undefined} />
+        <Ligne
+          icone={TriangleAlert}
+          couleur="var(--rouge)"
+          titre="Limite hors zone"
+          valeur={r.limite_dehors && zone ? `${r.dehors_max_min} min` : 'Désactivée'}
+          onClick={admin && zone ? () => setReglage('dehors') : undefined}
+        />
+        <Ligne icone={Flame} couleur="var(--orange)" titre="Hotspots" valeur={r.hotspots.length || 'Aucun'} onClick={admin ? () => setEditeur('hotspots') : undefined} />
+      </Section>
 
-        <div className="segmente" role="radiogroup" aria-label="Mode de jeu">
-          {(['classique', 'infection'] as const).map((m) => (
-            <button key={m} role="radio" aria-checked={r.mode === m} className={r.mode === m ? 'actif' : ''} disabled={!admin} onClick={() => regler({ mode: m })}>
-              {m === 'classique' ? <ShieldX size={17} aria-hidden /> : <Biohazard size={17} aria-hidden />}
-              {m === 'classique' ? 'Classique' : 'Infection'}
-            </button>
-          ))}
-        </div>
-        <p className="aide" style={{ textAlign: 'left' }}>
-          {DESCRIPTION_MODE[r.mode]}
-        </p>
-
-        <Reglage titre="Durée de la partie">
-          <Stepper valeur={r.duree_min} min={5} max={180} pas={5} unite="min" actif={admin} onChange={(v) => regler({ duree_min: v, ...(r.intervalle_min >= v ? { intervalle_min: Math.max(1, v - 5) } : {}) })} />
-        </Reglage>
-        <Reglage titre="Intervalle des pings">
-          <Stepper valeur={r.intervalle_min} min={1} max={Math.min(30, r.duree_min - 1)} pas={1} unite="min" actif={admin} onChange={(v) => regler({ intervalle_min: v })} />
-        </Reglage>
-        <Reglage titre="Avance des runners" onInfo={() => info('avance')}>
-          <Stepper valeur={r.avance_min} min={0} max={15} pas={1} unite="min" actif={admin} onChange={(v) => regler({ avance_min: v })} />
-        </Reglage>
-        <Reglage titre="Jokers par chasseur" onInfo={() => info('jokerChasseur')}>
-          <Stepper valeur={r.jokers_chasseur} min={0} max={10} pas={1} actif={admin} onChange={(v) => regler({ jokers_chasseur: v })} />
-        </Reglage>
-        <Reglage titre="Jokers par runner" onInfo={() => info('jokerRunner')}>
-          <Stepper valeur={r.jokers_runner} min={0} max={10} pas={1} actif={admin} onChange={(v) => regler({ jokers_runner: v })} />
-        </Reglage>
-      </section>
-
-      <section className="bloc">
-        <div className="bloc-titre">
-          <h2>Avancé</h2>
-        </div>
-
-        <div className="apercu-carte">
-          <Carte zone={r.zone_poly} centreDefaut={centrePartie(r)} hotspots={hotspotsCarte} recadrer={(r.zone_poly?.length ?? 0) + r.hotspots.length} />
-        </div>
-
-        <Reglage titre="Zone de jeu" sous={aUneZone(r) ? `${r.zone_poly?.length} points` : 'Facultative · aucune zone'}>
-          {admin && (
-            <button className="btn btn-secondaire btn-petit" onClick={() => setEditeur('zone')}>
-              <IconeCarte size={18} aria-hidden /> {aUneZone(r) ? 'Modifier' : 'Dessiner'}
-            </button>
-          )}
-        </Reglage>
-
-        <Reglage titre="Temps limite hors zone" onInfo={() => info('dehors')} sous={!aUneZone(r) ? 'Nécessite une zone de jeu' : undefined}>
-          <Interrupteur actif={r.limite_dehors && aUneZone(r)} desactive={!admin || !aUneZone(r)} onChange={(v) => regler({ limite_dehors: v })} label="Temps limite hors zone" />
-        </Reglage>
-        {r.limite_dehors && aUneZone(r) && (
-          <Reglage titre="Temps autorisé dehors (cumulé)">
-            <Stepper valeur={r.dehors_max_min} min={1} max={30} pas={1} unite="min" actif={admin} onChange={(v) => regler({ dehors_max_min: v })} />
-          </Reglage>
-        )}
-
-        <Reglage titre="Hotspots" onInfo={() => info('hotspots')} sous={r.hotspots.length ? `${r.hotspots.length} placé${r.hotspots.length > 1 ? 's' : ''}` : 'Facultatifs'}>
-          {admin && (
-            <button className="btn btn-secondaire btn-petit" onClick={() => setEditeur('hotspots')}>
-              <Flame size={18} aria-hidden /> Placer
-            </button>
-          )}
-        </Reglage>
-      </section>
+      <button className="btn-lien" style={{ alignSelf: 'center' }} onClick={() => setRegles(true)}>
+        <BookOpen size={18} aria-hidden /> Comment jouer ?
+      </button>
 
       <MessageErreur>{erreur}</MessageErreur>
 
       <div className="barre-bas">
         {admin ? (
           <>
-            <button className="btn btn-primaire" disabled={!peutLancer(joueurs) || occupe} onClick={() => void agir(() => lancerPartie(partie.id))}>
-              {occupe ? <Spinner /> : <Play size={20} fill="currentColor" aria-hidden />}
+            <button className="btn btn-plein" disabled={!peutLancer(joueurs) || occupe} onClick={() => void agir(() => lancerPartie(partie.id))}>
+              {occupe ? <Spinner /> : <Play size={18} fill="currentColor" aria-hidden />}
               Lancer la partie
             </button>
-            {!peutLancer(joueurs) && <p className="aide">Il faut au moins 1 chasseur et 1 runner.</p>}
+            {!peutLancer(joueurs) && <p className="aide" style={{ textAlign: 'center', fontSize: 13 }}>Il faut au moins 1 chasseur et 1 runner.</p>}
           </>
         ) : (
           <div className="attente">
@@ -375,83 +310,82 @@ export function Lobby({ partie, joueurs, moi, recharger, onQuitter }: PropsEcran
   )
 }
 
-function Reglage({ titre, sous, onInfo, children }: { titre: string; sous?: string; onInfo?: () => void; children: ReactNode }) {
+/** Feuille de modification d'un réglage (hôte uniquement). */
+function FeuilleReglage({ cle, partie, regler, onFermer }: { cle: CleReglage; partie: Partie; regler: (c: ReglagesPartie) => void; onFermer: () => void }) {
+  if (cle === 'mode') {
+    return (
+      <Feuille titre="Mode de jeu" onFermer={onFermer}>
+        <Segmente
+          label="Mode de jeu"
+          valeur={partie.mode}
+          onChange={(mode) => regler({ mode })}
+          options={[
+            { valeur: 'classique', label: 'Classique', icone: ShieldX },
+            { valeur: 'infection', label: 'Infection', icone: Biohazard },
+          ]}
+        />
+        <p className="aide">{DESCRIPTION_MODE[partie.mode]}</p>
+      </Feuille>
+    )
+  }
+  if (cle === 'dehors') {
+    return (
+      <Feuille titre="Limite hors zone" onFermer={onFermer}>
+        <div className="groupe">
+          <div className="ligne">
+            <span className="ligne-corps">Activer la limite</span>
+            <Interrupteur actif={partie.limite_dehors} onChange={(v) => regler({ limite_dehors: v })} label="Activer la limite hors zone" />
+          </div>
+        </div>
+        {partie.limite_dehors && (
+          <CompteurReglage valeur={partie.dehors_max_min} min={1} max={30} pas={1} unite="min" onChange={(v) => regler({ dehors_max_min: v })} />
+        )}
+        <p className="aide">Un runner hors de la zone est visible en direct par les chasseurs. Quand son temps dehors (cumulé) dépasse la limite, il est attrapé.</p>
+      </Feuille>
+    )
+  }
+  const n = NOMBRES[cle]
   return (
-    <div className="reglage">
-      <div className="reglage-texte">
-        <span>
-          {titre}
-          {onInfo && (
-            <button className="bouton-info" onClick={onInfo} aria-label={`Explication : ${titre}`}>
-              <Info size={16} aria-hidden />
-            </button>
-          )}
-        </span>
-        {sous && <small>{sous}</small>}
-      </div>
-      {children}
-    </div>
+    <Feuille titre={n.titre} onFermer={onFermer}>
+      <CompteurReglage
+        valeur={partie[cle]}
+        min={n.min}
+        max={n.max(partie)}
+        pas={n.pas}
+        unite={n.unite}
+        onChange={(v) => regler(cle === 'duree_min' && partie.intervalle_min >= v ? { duree_min: v, intervalle_min: Math.max(1, v - 5) } : { [cle]: v })}
+      />
+      <p className="aide">{n.aide}</p>
+    </Feuille>
   )
 }
 
-function Stepper({
-  valeur,
-  min,
-  max,
-  pas,
-  unite,
-  actif,
-  onChange,
-}: {
-  valeur: number
-  min: number
-  max: number
-  pas: number
-  unite?: string
-  actif: boolean
-  onChange: (v: number) => void
-}) {
-  if (!actif) return <strong className="valeur-fixe">{valeur}{unite ? ` ${unite}` : ''}</strong>
+function CompteurReglage({ valeur, min, max, pas, unite, onChange }: { valeur: number; min: number; max: number; pas: number; unite?: string; onChange: (v: number) => void }) {
   return (
-    <div className="stepper">
+    <div className="compteur-reglage">
       <button aria-label="Moins" disabled={valeur <= min} onClick={() => onChange(Math.max(min, valeur - pas))}>
-        <Minus size={18} aria-hidden />
+        <Minus size={26} aria-hidden />
       </button>
-      <span>
+      <strong>
         {valeur}
-        {unite && <small> {unite}</small>}
-      </span>
+        {unite && <small>{unite}</small>}
+      </strong>
       <button aria-label="Plus" disabled={valeur >= max} onClick={() => onChange(Math.min(max, valeur + pas))}>
-        <Plus size={18} aria-hidden />
+        <Plus size={26} aria-hidden />
       </button>
     </div>
-  )
-}
-
-function Interrupteur({ actif, desactive, onChange, label }: { actif: boolean; desactive: boolean; onChange: (v: boolean) => void; label: string }) {
-  return (
-    <button role="switch" aria-checked={actif} aria-label={label} className={`interrupteur${actif ? ' actif' : ''}`} disabled={desactive} onClick={() => onChange(!actif)}>
-      <span />
-    </button>
   )
 }
 
 /** Éditeur plein écran : dessin de la zone (polygone) ou placement des hotspots. */
-function EditeurCarte({
-  type,
-  partie,
-  onFermer,
-  onValider,
-}: {
-  type: 'zone' | 'hotspots'
-  partie: Partie
-  onFermer: () => void
-  onValider: (points: Point[]) => void
-}) {
+function EditeurCarte({ type, partie, onFermer, onValider }: { type: 'zone' | 'hotspots'; partie: Partie; onFermer: () => void; onValider: (points: Point[]) => void }) {
   const [points, setPoints] = useState<Point[]>(() => (type === 'zone' ? partie.zone_poly ?? [] : partie.hotspots))
-  const [recadrer] = useState(1)
   const geo = useGeoloc(true)
   const zone = type === 'zone' ? points : partie.zone_poly
+  const hotspots = useMemo(
+    () => (type === 'hotspots' ? points : partie.hotspots).map(([lat, lng]) => ({ pos: { lat, lng }, occupe: type === 'hotspots' })),
+    [type, points, partie.hotspots],
+  )
 
   const clic = (pos: LatLng) => {
     if (type === 'zone') return setPoints((p) => [...p, [pos.lat, pos.lng]])
@@ -469,45 +403,53 @@ function EditeurCarte({
         zone={zone}
         edition={type === 'zone'}
         centreDefaut={geo.position ?? centrePartie(partie)}
-        hotspots={(type === 'hotspots' ? points : partie.hotspots).map(([lat, lng]) => ({ pos: { lat, lng }, occupe: type === 'hotspots' }))}
+        hotspots={hotspots}
         marqueurs={geo.position ? [{ id: 'moi', pos: geo.position, type: 'moi' }] : []}
         onClic={clic}
-        recadrer={recadrer}
-        margeHaut={90}
+        recadrer={1}
+        margeHaut={80}
       >
         <div className="flottant-haut">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <button className="btn-icone rond" onClick={onFermer} aria-label="Annuler">
+          <div className="barre-outils">
+            <button className="btn-rond" onClick={onFermer} aria-label="Annuler">
               <X size={22} aria-hidden />
             </button>
             <span className="indice">
-              {type === 'zone' ? <IconeCarte size={16} aria-hidden /> : <Flame size={16} aria-hidden />}
+              {type === 'zone' ? <IconeCarte size={17} aria-hidden /> : <Flame size={17} aria-hidden />}
               {type === 'zone' ? 'Touche la carte pour tracer la zone' : 'Touche pour ajouter ou enlever'}
             </span>
           </div>
         </div>
       </Carte>
-      <div className="feuille">
-        <div className="feuille-titre">
-          <h2>{type === 'zone' ? 'Zone de jeu' : 'Hotspots'}</h2>
-          <span>
-            {points.length} {type === 'zone' ? 'point' : 'hotspot'}
-            {points.length > 1 ? 's' : ''}
-          </span>
+      <div className="panneau">
+        <div className="poignee" aria-hidden>
+          <span />
         </div>
-        {type === 'zone' && points.length > 0 && points.length < 3 && <p className="aide" style={{ textAlign: 'left' }}>Encore {3 - points.length} point{3 - points.length > 1 ? 's' : ''} minimum.</p>}
+        <div className="resume">
+          <div className="resume-corps">
+            <div className="resume-titre">{type === 'zone' ? 'Zone de jeu' : 'Hotspots'}</div>
+            <div className="resume-sous">
+              {type === 'zone'
+                ? points.length === 0
+                  ? 'Aucun point : on jouera sans zone.'
+                  : points.length < 3
+                    ? `Encore ${3 - points.length} point${3 - points.length > 1 ? 's' : ''} minimum.`
+                    : `${points.length} points`
+                : `${points.length} hotspot${points.length > 1 ? 's' : ''} · rayon 30 m`}
+            </div>
+          </div>
+        </div>
         <div className="rangee">
           {type === 'zone' && (
-            <button className="btn btn-secondaire btn-petit" style={{ flex: 1 }} disabled={!points.length} onClick={() => setPoints((p) => p.slice(0, -1))}>
+            <button className="btn btn-gris" disabled={!points.length} onClick={() => setPoints((p) => p.slice(0, -1))}>
               <Undo2 size={18} aria-hidden /> Retour
             </button>
           )}
-          <button className="btn btn-secondaire btn-petit" style={{ flex: 1 }} disabled={!points.length} onClick={() => setPoints([])}>
-            <Trash2 size={18} aria-hidden /> Tout effacer
+          <button className="btn btn-gris" disabled={!points.length} onClick={() => setPoints([])}>
+            <Trash2 size={18} aria-hidden /> Effacer
           </button>
         </div>
-        <button className="btn btn-primaire" disabled={!valide} onClick={() => onValider(points)}>
-          <Check size={20} aria-hidden />
+        <button className="btn btn-plein" disabled={!valide} onClick={() => onValider(points)}>
           {type === 'zone' && points.length === 0 ? 'Jouer sans zone' : 'Valider'}
         </button>
       </div>

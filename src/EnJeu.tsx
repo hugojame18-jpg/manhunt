@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   Biohazard,
+  BookOpen,
   Check,
+  Ellipsis,
   Flag,
   Flame,
   Hand,
@@ -13,19 +15,22 @@ import {
   Navigation,
   Radar,
   Signal,
+  Star,
   Timer,
   TriangleAlert,
   UserCheck,
   VenetianMask,
   X,
   Zap,
+  type LucideIcon,
 } from 'lucide-react'
 import { attraper, envoyerPosition, jokerFaux, jokerPing, positionsAvant, terminerPartie } from './api'
 import { Carte, type Hotspot, type Marqueur } from './Carte'
 import { useGeoloc, useWakeLock, type Geoloc } from './hooks'
-import type { Evenement, Joueur, LatLng, Partie, Ping, PositionDatee } from './jeu'
+import type { Joueur, LatLng, Partie, Ping, PositionDatee } from './jeu'
 import {
   centrePartie,
+  classementRunners,
   debutChasse,
   derniersPings,
   distanceM,
@@ -46,12 +51,13 @@ import {
   runnersEnDirect,
 } from './jeu'
 import type { PropsEcran } from './Lobby'
-import { Avatar, COULEUR_ROLE, MessageErreur, PastilleRole, Spinner, lienPlans, useAction, useConfirm } from './ui'
+import { Avatar, COULEUR_ROLE, FeuilleRegles, MessageErreur, PastilleRole, Spinner, lienPlans, useAction, useConfirm, useMenu } from './ui'
 
-const ROUGE = '#dc2626'
-const VIOLET = '#7c3aed'
+const ROUGE = 'var(--rouge)'
+const VIOLET = 'var(--violet)'
 
 type Confirmer = ReturnType<typeof useConfirm>[1]
+type OuvrirMenu = ReturnType<typeof useMenu>[1]
 
 /** Dernière position de chaque joueur reçue avant l'heure du ping n (mise en cache : elle ne change plus). */
 const cachePings = new Map<string, PositionDatee[]>()
@@ -111,6 +117,53 @@ function usePartagePosition(moi: Joueur, partie: Partie, geo: Geoloc): number | 
   return dernierEnvoi
 }
 
+interface Banniere {
+  id: number
+  titre: string
+  texte: string
+  icone: LucideIcon
+  couleur: string
+}
+
+/** Bannière façon notification iOS : nouveau ping, début de la chasse, joker d'un coéquipier. */
+function useBanniere(props: PropsEcran, n: number, avance: boolean): Banniere | null {
+  const { evenements, moi, joueurs } = props
+  const [banniere, setBanniere] = useState<Banniere | null>(null)
+  const prec = useRef({ n, avance, dernierEvt: evenements.at(-1)?.id ?? 0 })
+  const runner = estRunnerEnJeu(moi)
+
+  useEffect(() => {
+    const p = prec.current
+    let nouvelle: Omit<Banniere, 'id'> | null = null
+    if (p.avance && !avance) {
+      nouvelle = { titre: 'La chasse commence !', texte: runner ? 'Les chasseurs sont lâchés. Cache-toi bien.' : 'Les runners ont pris leur avance. À vous de jouer.', icone: Hourglass, couleur: 'var(--orange)' }
+    } else if (n > p.n && n >= 1) {
+      const faux = runner && evenements.some((e) => e.type === 'faux' && e.joueur_id === moi.id && e.tick === n)
+      nouvelle = {
+        titre: `Ping n°${n}`,
+        texte: runner ? (faux ? 'Les chasseurs voient ta fausse position.' : 'Les chasseurs viennent de voir ta position.') : 'La position des runners est à jour.',
+        icone: Radar,
+        couleur: 'var(--bleu)',
+      }
+    } else if (!runner) {
+      const joker = evenements.find((e) => e.id > p.dernierEvt && e.type === 'joker_ping' && e.joueur_id !== moi.id)
+      if (joker) {
+        const qui = joueurs.find((j) => j.id === joker.joueur_id)?.pseudo ?? 'Un chasseur'
+        const cible = joueurs.find((j) => j.id === joker.cible_id)?.pseudo ?? 'un runner'
+        nouvelle = { titre: 'Joker utilisé', texte: `${qui} a révélé ${cible}.`, icone: Zap, couleur: ROUGE }
+      }
+    }
+    prec.current = { n, avance, dernierEvt: Math.max(p.dernierEvt, evenements.at(-1)?.id ?? 0) }
+    if (!nouvelle) return
+    const id = Date.now()
+    setBanniere({ ...nouvelle, id })
+    const t = window.setTimeout(() => setBanniere((b) => (b?.id === id ? null : b)), 4500)
+    return () => window.clearTimeout(t)
+  }, [n, avance, evenements, runner, moi.id, joueurs])
+
+  return banniere
+}
+
 interface Contexte {
   props: PropsEcran
   geo: Geoloc
@@ -119,6 +172,7 @@ interface Contexte {
   direct: Joueur[]
   centrerSur: (pos: LatLng) => void
   confirmer: Confirmer
+  ouvrirMenu: OuvrirMenu
   dernierEnvoi: number | null
   ouvrirFauxPing: () => void
 }
@@ -131,8 +185,11 @@ export function Jeu(props: PropsEcran) {
   const [recadrer, setRecadrer] = useState(0)
   const [centrer, setCentrer] = useState<{ pos: LatLng; n: number } | null>(null)
   const [poche, setPoche] = useState(false)
+  const [regles, setRegles] = useState(false)
+  const [replie, setReplie] = useState(false)
   const [choixFaux, setChoixFaux] = useState(false)
-  const [modal, confirmer] = useConfirm()
+  const [confirmation, confirmer] = useConfirm()
+  const [menu, ouvrirMenu] = useMenu()
   const admin = partie.admin_id === moi.id
   const vueChasseur = moi.role === 'chasseur' || moi.statut === 'attrape'
   const runnerEnJeu = estRunnerEnJeu(moi)
@@ -147,11 +204,13 @@ export function Jeu(props: PropsEcran) {
   const debutCycle = n >= 1 ? heurePing(partie, n) : avance ? parseTs(partie.started_at ?? '') : chasse
   const cible = avance ? chasse : prochain
   const progression = cible ? Math.min(1, Math.max(0, (now - debutCycle) / (cible - debutCycle))) : 1
+  const restant = cible ? cible - now : 0
 
   const positionsAuPing = usePositionsAuPing(partie, n, vueChasseur)
   const pings = useMemo(() => derniersPings(partie, joueurs, evenements, positionsAuPing, n), [partie, joueurs, evenements, positionsAuPing, n])
   const direct = useMemo(() => runnersEnDirect(partie, joueurs, now), [partie, joueurs, now])
   const occupes = useMemo(() => hotspotsOccupes(partie, joueurs, now), [partie, joueurs, now])
+  const banniere = useBanniere(props, n, avance)
 
   // Fausse position déjà choisie pour le prochain ping (affichée au runner pour qu'il s'en souvienne).
   const fauxPrevu = runnerEnJeu
@@ -195,17 +254,33 @@ export function Jeu(props: PropsEcran) {
   )
 
   const terminer = async () => {
-    const ok = await confirmer({
-      titre: 'Terminer la partie ?',
-      message: 'La partie s’arrête tout de suite pour tout le monde et le récap s’affiche.',
-      confirmer: 'Terminer',
-      ton: 'danger',
-      icone: Flag,
-    })
+    const ok = await confirmer({ titre: 'Terminer la partie ?', message: 'La partie s’arrête pour tout le monde et le récap s’affiche.', confirmer: 'Terminer la partie', danger: true, icone: Flag, couleur: ROUGE })
     if (ok) void terminerPartie(partie.id).then(recharger)
   }
 
-  const ctx: Contexte = { props, geo, n, pings, direct, centrerSur, confirmer, dernierEnvoi, ouvrirFauxPing: () => setChoixFaux(true) }
+  const meDeclarer = async () => {
+    const ok = await confirmer({
+      titre: 'Tu as été attrapé ?',
+      message: partie.mode === 'infection' ? 'Tu deviendras chasseur. Tu gardes tes points.' : 'Tu seras éliminé et suivras la partie en spectateur. Tu gardes tes points.',
+      confirmer: 'Oui, j’ai été attrapé',
+      danger: true,
+      icone: UserCheck,
+      couleur: ROUGE,
+    })
+    if (ok) void attraper(moi.id).then(recharger)
+  }
+
+  const ouvrirOptions = () =>
+    ouvrirMenu({
+      actions: [
+        { label: 'Mode poche', icone: Moon, onClick: () => setPoche(true) },
+        { label: 'Comment jouer', icone: BookOpen, onClick: () => setRegles(true) },
+        ...(runnerEnJeu ? [{ label: 'J’ai été attrapé', icone: UserCheck, danger: true, onClick: () => void meDeclarer() }] : []),
+        ...(admin ? [{ label: 'Terminer la partie', icone: Flag, danger: true, onClick: () => void terminer() }] : []),
+      ],
+    })
+
+  const ctx: Contexte = { props, geo, n, pings, direct, centrerSur, confirmer, ouvrirMenu, dernierEnvoi, ouvrirFauxPing: () => setChoixFaux(true) }
   const infecte = moi.role_initial === 'runner' && moi.role === 'chasseur'
 
   if (choixFaux && runnerEnJeu) {
@@ -214,57 +289,70 @@ export function Jeu(props: PropsEcran) {
 
   return (
     <div className="ecran">
-      {modal}
+      {confirmation}
+      {menu}
+      {regles && <FeuilleRegles onFermer={() => setRegles(false)} />}
       {poche && <ModePoche actif={dernierEnvoi !== null && Date.now() - dernierEnvoi < 20_000} onSortir={() => setPoche(false)} />}
-      <Carte zone={partie.zone_poly} centreDefaut={centrePartie(partie)} hotspots={hotspots} marqueurs={marqueurs} recadrer={recadrer} centrer={centrer} margeHaut={130}>
+      {banniere && (
+        <button className="banniere" style={{ ['--c' as string]: banniere.couleur, border: 'none', textAlign: 'left' }} onClick={() => setReplie(false)}>
+          <span className="banniere-icone">
+            <banniere.icone size={20} aria-hidden />
+          </span>
+          <span>
+            <strong>{banniere.titre}</strong>
+            <span>{banniere.texte}</span>
+          </span>
+        </button>
+      )}
+
+      <Carte zone={partie.zone_poly} centreDefaut={centrePartie(partie)} hotspots={hotspots} marqueurs={marqueurs} recadrer={recadrer} centrer={centrer} margeHaut={120}>
         <div className="flottant-haut">
           <div className="hud">
             <div className="hud-ligne">
               <div className="compteur">
                 <small>
-                  <Timer size={13} aria-hidden /> Fin
+                  <Timer size={12} aria-hidden /> Fin
                 </small>
                 <strong>{formatDuree(fin - now)}</strong>
               </div>
               <PastilleRole role={moi.role} />
               <div className="compteur droite">
                 <small>
-                  {avance ? <Hourglass size={13} aria-hidden /> : <Radar size={13} aria-hidden />} {avance ? 'Chasse' : 'Ping'}
+                  {avance ? <Hourglass size={12} aria-hidden /> : <Radar size={12} aria-hidden />} {avance ? 'Chasse' : 'Ping'}
                 </small>
-                <strong>{avance ? formatDuree(chasse - now) : prochain ? formatDuree(prochain - now) : '—'}</strong>
+                <strong className={cible && restant < 10_000 ? 'urgent' : ''}>{cible ? formatDuree(restant) : '—'}</strong>
               </div>
             </div>
             <div className="progression" aria-hidden>
               <div style={{ width: `${progression * 100}%` }} />
             </div>
           </div>
+
+          {dehors && (
+            <div className="alerte rouge pulse" role="alert">
+              <TriangleAlert size={20} aria-hidden />
+              {runnerEnJeu && partie.limite_dehors ? `Hors zone, visible en direct · ${formatDuree(Math.max(0, partie.dehors_max_min * 60 - moi.dehors_s) * 1000)}` : 'Tu es hors de la zone !'}
+            </div>
+          )}
           {avance && (
-            <div className={`alerte ${moi.role === 'chasseur' ? 'ambre' : ''}`}>
-              <Hourglass size={20} aria-hidden />
-              {moi.role === 'chasseur' ? `Les runners prennent leur avance. Ne bouge pas avant ${formatDuree(chasse - now)} !` : `C'est ton avance : fuis ! La chasse commence dans ${formatDuree(chasse - now)}.`}
+            <div className={`alerte ${moi.role === 'chasseur' ? 'orange' : ''}`}>
+              <Hourglass size={18} aria-hidden />
+              {moi.role === 'chasseur' ? `Ne bouge pas : la chasse commence dans ${formatDuree(chasse - now)}` : `Fuis ! La chasse commence dans ${formatDuree(chasse - now)}`}
             </div>
           )}
           {moi.statut === 'attrape' && (
             <div className="alerte">
-              <UserCheck size={20} aria-hidden /> Tu as été attrapé. Tu suis la partie en spectateur.
+              <UserCheck size={18} aria-hidden /> Attrapé : tu suis la partie en spectateur
             </div>
           )}
           {infecte && (
             <div className="alerte">
-              <Biohazard size={20} aria-hidden /> Tu as été infecté : tu chasses maintenant les runners !
-            </div>
-          )}
-          {dehors && (
-            <div className="alerte rouge forte" role="alert">
-              <TriangleAlert size={22} aria-hidden />
-              {runnerEnJeu && partie.limite_dehors
-                ? `Hors zone : visible en direct ! ${formatDuree(Math.max(0, partie.dehors_max_min * 60 - moi.dehors_s) * 1000)} restantes`
-                : 'Tu es hors de la zone ! Reviens dedans.'}
+              <Biohazard size={18} aria-hidden /> Infecté : tu chasses maintenant les runners
             </div>
           )}
           {geo.erreur && (
-            <div className="alerte rouge" role="alert">
-              <MapPinOff size={20} aria-hidden /> {geo.erreur}
+            <div className="alerte rouge" role="alert" style={{ fontSize: 13, fontWeight: 500 }}>
+              <MapPinOff size={18} aria-hidden /> {geo.erreur}
             </div>
           )}
           {!geo.erreur && !geo.position && (
@@ -273,173 +361,160 @@ export function Jeu(props: PropsEcran) {
             </div>
           )}
           {geo.position && !geo.precise && (
-            <div className="alerte ambre">
-              <Signal size={20} aria-hidden /> Position imprécise (± {Math.round(geo.position.accuracy)} m) : pas envoyée tant qu'elle dépasse 50 m.
+            <div className="alerte jaune">
+              <Signal size={18} aria-hidden /> GPS imprécis (± {Math.round(geo.position.accuracy)} m), en attente
             </div>
           )}
         </div>
+
         <div className="actions-carte">
           {geo.position && (
-            <button className="btn-icone rond" aria-label="Centrer sur moi" onClick={() => geo.position && centrerSur({ lat: geo.position.lat, lng: geo.position.lng })}>
-              <LocateFixed size={22} aria-hidden />
+            <button className="btn-rond" aria-label="Centrer sur moi" onClick={() => geo.position && centrerSur({ lat: geo.position.lat, lng: geo.position.lng })}>
+              <LocateFixed size={21} aria-hidden />
             </button>
           )}
-          <button className="btn-icone rond" aria-label="Voir toute la zone" onClick={() => setRecadrer((r) => r + 1)}>
-            <Maximize2 size={20} aria-hidden />
+          <button className="btn-rond" aria-label="Voir toute la zone" onClick={() => setRecadrer((r) => r + 1)}>
+            <Maximize2 size={19} aria-hidden />
+          </button>
+          <button className="btn-rond" aria-label="Mode poche" onClick={() => setPoche(true)}>
+            <Moon size={19} aria-hidden />
+          </button>
+          <button className="btn-rond" aria-label="Plus d’options" onClick={ouvrirOptions}>
+            <Ellipsis size={21} aria-hidden />
           </button>
         </div>
       </Carte>
 
-      <div className="feuille">
-        {runnerEnJeu ? (
-          <VueRunner ctx={ctx} monHotspot={monHotspot} />
-        ) : (
-          <VueChasseur ctx={ctx} spectateur={moi.statut === 'attrape'} />
-        )}
-        <button className="btn btn-secondaire" onClick={() => setPoche(true)}>
-          <Moon size={20} aria-hidden />
-          Mode poche (écran noir)
+      <div className={`panneau${replie ? ' replie' : ''}`}>
+        <button className="poignee" onClick={() => setReplie((r) => !r)} aria-label={replie ? 'Agrandir le panneau' : 'Réduire le panneau'}>
+          <span />
         </button>
-        {admin && (
-          <button className="btn btn-fantome danger" onClick={() => void terminer()}>
-            <Flag size={18} aria-hidden />
-            Terminer la partie
-          </button>
-        )}
+        {runnerEnJeu ? <PanneauRunner ctx={ctx} monHotspot={monHotspot} /> : <PanneauChasseur ctx={ctx} spectateur={moi.statut === 'attrape' || moi.role !== 'chasseur'} />}
       </div>
     </div>
   )
 }
 
-function CarteJoker({ couleur, icone, titre, texte, children, actif }: { couleur: string; icone: ReactNode; titre: string; texte: string; children?: ReactNode; actif?: boolean }) {
-  return (
-    <div className={`bonus${actif ? ' actif' : ''}`} style={{ ['--c' as string]: couleur }}>
-      <div className="bonus-tete">
-        <span className="bonus-icone">{icone}</span>
-        <div style={{ flex: 1 }}>
-          <strong>{titre}</strong>
-          <p>{texte}</p>
-        </div>
-      </div>
-      {children}
-    </div>
-  )
+function rangTexte(rang: number, total: number): string {
+  return `${rang === 1 ? '1er' : `${rang}e`} sur ${total}`
 }
 
-function VueRunner({ ctx, monHotspot }: { ctx: Contexte; monHotspot: number | null }) {
-  const { props, n, confirmer, dernierEnvoi, ouvrirFauxPing, centrerSur } = ctx
-  const { partie, moi, now, evenements, recharger } = props
-  const { occupe, erreur, lancer } = useAction()
+function PanneauRunner({ ctx, monHotspot }: { ctx: Contexte; monHotspot: number | null }) {
+  const { props, n, dernierEnvoi, ouvrirFauxPing, centrerSur } = ctx
+  const { partie, moi, now, evenements, joueurs } = props
   const jokers = jokersDispo(moi, partie)
-  const faux = evenements.find((e: Evenement) => e.type === 'faux' && e.joueur_id === moi.id && e.tick !== null && e.tick > n)
-  const fauxEnAttente = faux !== undefined
+  const faux = evenements.find((e) => e.type === 'faux' && e.joueur_id === moi.id && e.tick !== null && e.tick > n)
   const resteUnPing = prochainPing(partie, now) !== null || enAvance(partie, now)
   const partageActif = dernierEnvoi !== null && Date.now() - dernierEnvoi < 20_000
-
-  const meDeclarer = async () => {
-    const ok = await confirmer({
-      titre: 'Tu as été attrapé ?',
-      message: partie.mode === 'infection' ? 'Tu deviendras chasseur.' : 'Tu seras éliminé et suivras la partie en spectateur.',
-      confirmer: 'Oui, attrapé',
-      ton: 'danger',
-      icone: UserCheck,
-    })
-    if (ok) void lancer(async () => {
-      await attraper(moi.id)
-      await recharger()
-    })
-  }
+  const classement = classementRunners(joueurs)
+  const rang = classement.findIndex((j) => j.id === moi.id) + 1
+  const palier = enAvance(partie, now) ? 0 : moi.points_palier
 
   return (
     <>
-      <div className="statut">
-        <span className={`voyant${partageActif ? ' actif' : ''}`} aria-hidden />
-        {dernierEnvoi ? `Position partagée ${ilYa(Date.now() - dernierEnvoi)}` : 'Position pas encore partagée'}
+      <div className="resume">
+        <div className="resume-corps">
+          <div className="points">
+            <strong>{Math.floor(moi.points)}</strong>
+            <span>pts</span>
+          </div>
+          <div className="statut" style={{ marginTop: 6 }}>
+            <span className={`voyant${partageActif ? ' actif' : ''}`} aria-hidden />
+            {classement.length > 1 ? `${rangTexte(rang, classement.length)} · ` : ''}
+            {partageActif ? 'position partagée' : 'position pas encore partagée'}
+          </div>
+        </div>
+        <span className={`taux${palier >= 5 ? ' brulant' : palier > 0 ? ' chaud' : ''}`}>
+          <Star size={14} aria-hidden fill={palier > 0 ? 'currentColor' : 'none'} />
+          {enAvance(partie, now) ? 'Après l’avance' : palier > 0 ? `+${palier} / 10 s` : 'Aucun chasseur proche'}
+        </span>
       </div>
 
-      {monHotspot !== null && (
-        <div className="alerte ambre" style={{ boxShadow: 'none' }}>
-          <Flame size={20} aria-hidden /> Tu es dans un hotspot : +1 joker toutes les 2 min, mais les chasseurs te pingent.
+      <div className="details">
+        <div className={`joker${faux ? ' pret' : ''}${jokers < 1 && !faux ? ' inactif' : ''}`} style={{ ['--c' as string]: VIOLET }}>
+          <span className="joker-icone">
+            <VenetianMask size={22} aria-hidden />
+          </span>
+          <div className="joker-corps">
+            <strong>Fausse position</strong>
+            <span>
+              {faux
+                ? `Prête pour le ping n°${faux.tick}`
+                : jokers < 1
+                  ? 'Plus de joker'
+                  : !resteUnPing
+                    ? 'Plus de ping avant la fin'
+                    : `${jokers} joker${jokers > 1 ? 's' : ''} · trompe le prochain ping`}
+            </span>
+          </div>
+          {faux && faux.lat !== null && faux.lng !== null && (
+            <button className="btn btn-violet-teinte btn-petit" onClick={() => centrerSur({ lat: faux.lat as number, lng: faux.lng as number })}>
+              Voir
+            </button>
+          )}
+          {!faux && jokers > 0 && resteUnPing && (
+            <button className="btn btn-violet btn-petit" onClick={ouvrirFauxPing}>
+              Placer
+            </button>
+          )}
         </div>
-      )}
 
-      {partie.limite_dehors && moi.dehors_s > 0 && (
-        <div className="statut">
-          <Timer size={18} aria-hidden /> Temps hors zone : {formatDuree(moi.dehors_s * 1000)} / {partie.dehors_max_min}:00
-        </div>
-      )}
-
-      <CarteJoker
-        couleur={VIOLET}
-        icone={<VenetianMask size={22} aria-hidden />}
-        titre={`Jokers : ${jokers}`}
-        texte={
-          fauxEnAttente
-            ? 'Faux ping prêt : au prochain ping, les chasseurs te verront à l’endroit choisi (en violet sur ta carte).'
-            : jokers < 1
-              ? 'Plus de joker disponible.'
-              : !resteUnPing
-                ? 'Plus aucun ping avant la fin de la partie.'
-                : 'Choisis sur la carte où les chasseurs te verront au prochain ping.'
-        }
-        actif={fauxEnAttente}
-      >
-        {fauxEnAttente && faux?.lat != null && faux.lng != null && (
-          <button className="btn btn-secondaire btn-petit" onClick={() => centrerSur({ lat: faux.lat as number, lng: faux.lng as number })}>
-            <LocateFixed size={18} aria-hidden /> Voir ma fausse position
-          </button>
+        {monHotspot !== null && (
+          <div className="joker" style={{ ['--c' as string]: 'var(--orange)' }}>
+            <span className="joker-icone">
+              <Flame size={22} aria-hidden />
+            </span>
+            <div className="joker-corps">
+              <strong>Dans un hotspot</strong>
+              <span>+1 joker toutes les 2 min, mais les chasseurs te pingent.</span>
+            </div>
+          </div>
         )}
-        {!fauxEnAttente && jokers > 0 && (
-          <button className="btn btn-violet" disabled={occupe || !resteUnPing} onClick={ouvrirFauxPing}>
-            <VenetianMask size={18} aria-hidden /> Placer une fausse position
-          </button>
-        )}
-      </CarteJoker>
-      <MessageErreur>{erreur}</MessageErreur>
 
-      <button className="btn btn-fantome danger" onClick={() => void meDeclarer()}>
-        <UserCheck size={18} aria-hidden /> J'ai été attrapé
-      </button>
+        {partie.limite_dehors && moi.dehors_s > 0 && (
+          <div className="statut" style={{ fontSize: 15 }}>
+            <Timer size={16} aria-hidden /> Temps hors zone : {formatDuree(moi.dehors_s * 1000)} sur {partie.dehors_max_min} min
+          </div>
+        )}
+      </div>
     </>
   )
 }
 
-function VueChasseur({ ctx, spectateur }: { ctx: Contexte; spectateur: boolean }) {
-  const { props, geo, n, pings, direct, centrerSur, confirmer } = ctx
+function PanneauChasseur({ ctx, spectateur }: { ctx: Contexte; spectateur: boolean }) {
+  const { props, geo, n, pings, direct, centrerSur, confirmer, ouvrirMenu } = ctx
   const { partie, joueurs, moi, now, recharger } = props
   const { occupe, erreur, lancer } = useAction()
   const runners = joueurs.filter((j) => j.role_initial === 'runner' || j.role === 'runner')
   const enJeu = runners.filter(estRunnerEnJeu)
   const jokers = jokersDispo(moi, partie)
   const avance = enAvance(partie, now)
+  const etaitRunner = moi.role_initial === 'runner'
 
-  const [cible, setCible] = useState<string | null>(null)
-
-  const pingForce = async () => {
-    const r = enJeu.find((j) => j.id === cible)
-    if (!r) return
-    const ok = await confirmer({
-      titre: `Pinger ${r.pseudo} ?`,
-      message: 'Sa position réelle actuelle s’affiche pour tous les chasseurs. Utilise 1 joker.',
-      confirmer: 'Pinger',
-      ton: 'rouge',
+  const choisirCible = () =>
+    ouvrirMenu({
+      titre: 'Joker : qui révéler ?',
+      message: 'Sa vraie position s’affiche tout de suite pour tous les chasseurs.',
       icone: Zap,
+      couleur: ROUGE,
+      actions: enJeu.map((r) => ({
+        label: r.pseudo,
+        onClick: () =>
+          void lancer(async () => {
+            await jokerPing(moi.id, r.id)
+            await recharger()
+          }),
+      })),
     })
-    if (ok)
-      void lancer(async () => {
-        await jokerPing(moi.id, r.id)
-        await recharger()
-        setCible(null)
-      })
-  }
 
   const marquerAttrape = async (r: Joueur) => {
     const ok = await confirmer({
       titre: `${r.pseudo} est attrapé ?`,
       message: partie.mode === 'infection' ? `${r.pseudo} deviendra chasseur.` : `${r.pseudo} sera éliminé.`,
-      confirmer: 'Attrapé !',
-      ton: 'danger',
-      icone: UserCheck,
+      confirmer: 'Oui, attrapé',
+      danger: true,
+      icone: Hand,
+      couleur: 'var(--orange)',
     })
     if (ok)
       void lancer(async () => {
@@ -448,98 +523,79 @@ function VueChasseur({ ctx, spectateur }: { ctx: Contexte; spectateur: boolean }
       })
   }
 
-  const sousTitre = avance ? 'Les pings commencent au départ de la chasse' : n < 1 ? `1er ping dans ${formatDuree(heurePing(partie, 1) - now)}` : `Ping n°${n} · ${ilYa(now - heurePing(partie, n))}`
+  const sousTitre = avance
+    ? 'Les pings commencent avec la chasse'
+    : n < 1
+      ? `1er ping dans ${formatDuree(heurePing(partie, 1) - now)}`
+      : `Ping n°${n} · ${ilYa(now - heurePing(partie, n))}`
 
   return (
     <>
-      <div className="feuille-titre">
-        <h2>Runners</h2>
-        <span>{enJeu.length} en jeu</span>
+      <div className="resume">
+        <div className="resume-corps">
+          <div className="resume-titre">{spectateur && etaitRunner ? `${Math.floor(moi.points)} pts` : `Runners · ${enJeu.length}`}</div>
+          <div className="resume-sous">{spectateur && etaitRunner ? 'Tes points sont gardés jusqu’à la fin.' : sousTitre}</div>
+        </div>
+        {!spectateur && (
+          <button className="btn btn-rouge-teinte btn-petit" disabled={jokers < 1 || avance || enJeu.length === 0 || occupe} onClick={choisirCible}>
+            {occupe ? <Spinner taille={16} /> : <Zap size={16} aria-hidden />} Joker · {jokers}
+          </button>
+        )}
       </div>
-      <p className="aide" style={{ textAlign: 'left', marginTop: -8 }}>
-        {sousTitre}
-      </p>
 
-      <ul className="liste">
-        {runners.map((r) => {
-          const actifR = estRunnerEnJeu(r)
-          const enDirect = direct.find((d) => d.id === r.id)
-          const ping = pings.get(r.id)
-          const pos: LatLng | null = enDirect && enDirect.derniere_lat !== null && enDirect.derniere_lng !== null ? { lat: enDirect.derniere_lat, lng: enDirect.derniere_lng } : ping ?? null
-          let sous = 'Pas encore pingé'
-          if (!actifR) sous = r.role === 'chasseur' ? 'Infecté · chasseur' : 'Attrapé'
-          else if (enDirect) sous = 'Hors zone · en direct'
-          else if (ping) sous = `${ping.source === 'joker' ? 'Joker' : ping.source === 'hotspot' ? 'Hotspot' : 'Ping'} ${ilYa(now - ping.at)}`
-          if (actifR && pos && geo.position) sous += ` · ${formatDistance(distanceM(geo.position, pos))}`
-          return (
-            <li key={r.id} className={actifR ? '' : 'inactif'}>
-              <button className="ligne-cliquable" onClick={() => pos && centrerSur(pos)} disabled={!pos || !actifR} aria-label={`Voir ${r.pseudo} sur la carte`}>
-                <Avatar nom={r.pseudo} couleur={!actifR ? '#94a3b8' : enDirect ? ROUGE : COULEUR_ROLE.runner} />
-                <span className="corps">
-                  <span className="nom">{r.pseudo}</span>
-                  <span className="sous" style={enDirect ? { color: ROUGE, fontWeight: 700 } : undefined}>
-                    {sous}
+      <div className="details">
+        <div className="groupe">
+          {runners.map((r) => {
+            const actif = estRunnerEnJeu(r)
+            const enDirect = direct.find((d) => d.id === r.id)
+            const ping = pings.get(r.id)
+            const pos: LatLng | null = enDirect && enDirect.derniere_lat !== null && enDirect.derniere_lng !== null ? { lat: enDirect.derniere_lat, lng: enDirect.derniere_lng } : ping ?? null
+            let sous = 'Pas encore pingé'
+            if (!actif) sous = r.role === 'chasseur' ? 'Infecté' : 'Attrapé'
+            else if (enDirect) sous = 'Hors zone · en direct'
+            else if (ping) sous = `${ping.source === 'joker' ? 'Joker' : ping.source === 'hotspot' ? 'Hotspot' : 'Ping'} ${ilYa(now - ping.at)}`
+            if (actif && pos && geo.position) sous += ` · ${formatDistance(distanceM(geo.position, pos))}`
+            return (
+              <div key={r.id} className={`ligne avec-avatar${actif ? '' : ' inactive'}`}>
+                <button
+                  style={{ all: 'unset', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, cursor: pos && actif ? 'pointer' : 'default' }}
+                  onClick={() => pos && actif && centrerSur(pos)}
+                  aria-label={`Voir ${r.pseudo} sur la carte`}
+                >
+                  <Avatar nom={r.pseudo} couleur={!actif ? 'var(--gris)' : enDirect ? ROUGE : COULEUR_ROLE.runner} />
+                  <span className="ligne-corps">
+                    <span className="ligne-titre">{r.pseudo}</span>
+                    <span className="ligne-sous" style={enDirect ? { color: 'var(--rouge)', fontWeight: 600 } : undefined}>
+                      {sous}
+                    </span>
                   </span>
-                </span>
-              </button>
-              {actifR && (
-                <div className="droite">
-                  {pos && (
-                    <a className="btn-icone discret" href={lienPlans(pos.lat, pos.lng)} target="_blank" rel="noreferrer" aria-label={`Itinéraire vers ${r.pseudo} dans Plans`}>
-                      <Navigation size={18} aria-hidden />
-                    </a>
-                  )}
-                  {!spectateur && (
-                    <button className="btn-icone discret" onClick={() => void marquerAttrape(r)} aria-label={`Marquer ${r.pseudo} comme attrapé`}>
-                      <Hand size={18} aria-hidden />
-                    </button>
-                  )}
-                </div>
-              )}
-            </li>
-          )
-        })}
-      </ul>
-
-      {!spectateur && (
-        <CarteJoker couleur={ROUGE} icone={<Zap size={22} aria-hidden />} titre={`Jokers : ${jokers}`} texte={jokers > 0 ? 'Choisis un runner : sa position réelle s’affiche tout de suite pour tous les chasseurs.' : 'Plus de joker disponible.'}>
-          {jokers > 0 && !avance && enJeu.length > 0 && (
-            <>
-              <div className="chips" role="radiogroup" aria-label="Runner à pinger">
-                {enJeu.map((r) => (
-                  <button key={r.id} role="radio" aria-checked={cible === r.id} className={`chip${cible === r.id ? ' actif' : ''}`} onClick={() => setCible(r.id)}>
-                    {r.pseudo}
-                  </button>
-                ))}
+                </button>
+                {actif && (
+                  <span className="ligne-actions">
+                    {pos && (
+                      <a className="btn-icone" href={lienPlans(pos.lat, pos.lng)} target="_blank" rel="noreferrer" aria-label={`Itinéraire vers ${r.pseudo} dans Plans`}>
+                        <Navigation size={17} aria-hidden />
+                      </a>
+                    )}
+                    {!spectateur && (
+                      <button className="btn-icone orange" onClick={() => void marquerAttrape(r)} aria-label={`Marquer ${r.pseudo} comme attrapé`}>
+                        <Hand size={17} aria-hidden />
+                      </button>
+                    )}
+                  </span>
+                )}
               </div>
-              <button className="btn btn-rouge" disabled={!cible || occupe} onClick={() => void pingForce()}>
-                {occupe ? <Spinner /> : <Zap size={18} aria-hidden />}
-                {cible ? `Pinger ${enJeu.find((r) => r.id === cible)?.pseudo ?? ''}` : 'Choisis un runner'}
-              </button>
-            </>
-          )}
-          {avance && jokers > 0 && <p className="aide" style={{ textAlign: 'left' }}>Utilisable après le départ de la chasse.</p>}
-        </CarteJoker>
-      )}
-      <MessageErreur>{erreur}</MessageErreur>
+            )
+          })}
+        </div>
+        <MessageErreur>{erreur}</MessageErreur>
+      </div>
     </>
   )
 }
 
 /** Carte plein écran : le runner touche l'endroit où les chasseurs le verront au prochain ping, puis valide. */
-function ChoixFaussePosition({
-  partie,
-  moi,
-  geo,
-  recharger,
-  onFermer,
-}: {
-  partie: Partie
-  moi: Joueur
-  geo: Geoloc
-  recharger: () => Promise<void>
-  onFermer: () => void
-}) {
+function ChoixFaussePosition({ partie, moi, geo, recharger, onFermer }: { partie: Partie; moi: Joueur; geo: Geoloc; recharger: () => Promise<void>; onFermer: () => void }) {
   const [point, setPoint] = useState<LatLng | null>(null)
   const { occupe, erreur, setErreur, lancer } = useAction()
   const hotspots = useMemo<Hotspot[]>(() => partie.hotspots.map(([lat, lng]) => ({ pos: { lat, lng } })), [partie.hotspots])
@@ -571,34 +627,33 @@ function ChoixFaussePosition({
 
   return (
     <div className="ecran">
-      <Carte zone={partie.zone_poly} centreDefaut={geo.position ?? centrePartie(partie)} hotspots={hotspots} marqueurs={marqueurs} onClic={clic} recadrer={1} margeHaut={90}>
+      <Carte zone={partie.zone_poly} centreDefaut={geo.position ?? centrePartie(partie)} hotspots={hotspots} marqueurs={marqueurs} onClic={clic} recadrer={1} margeHaut={80}>
         <div className="flottant-haut">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <button className="btn-icone rond" onClick={onFermer} aria-label="Annuler">
+          <div className="barre-outils">
+            <button className="btn-rond" onClick={onFermer} aria-label="Annuler">
               <X size={22} aria-hidden />
             </button>
             <span className="indice">
-              <VenetianMask size={16} aria-hidden />
+              <VenetianMask size={17} aria-hidden />
               {point ? 'Touche ailleurs pour la déplacer' : 'Touche la carte pour placer ta fausse position'}
             </span>
           </div>
         </div>
       </Carte>
-      <div className="feuille">
-        <div className="feuille-titre">
-          <h2>Fausse position</h2>
-          {point && geo.position && <span>à {formatDistance(distanceM(geo.position, point))} de toi</span>}
+      <div className="panneau">
+        <div className="poignee" aria-hidden>
+          <span />
         </div>
-        <p className="aide" style={{ textAlign: 'left', marginTop: -8 }}>
-          Au prochain ping, les chasseurs te verront à cet endroit au lieu de ta vraie position. Utilise 1 joker.
-        </p>
+        <div className="resume">
+          <div className="resume-corps">
+            <div className="resume-titre">Fausse position</div>
+            <div className="resume-sous">{point && geo.position ? `À ${formatDistance(distanceM(geo.position, point))} de toi` : 'Au prochain ping, les chasseurs te verront à cet endroit.'}</div>
+          </div>
+        </div>
         <MessageErreur>{erreur}</MessageErreur>
         <button className="btn btn-violet" disabled={!point || occupe} onClick={valider}>
           {occupe ? <Spinner /> : <Check size={20} aria-hidden />}
-          {point ? 'Valider la fausse position' : 'Touche la carte pour choisir'}
-        </button>
-        <button className="btn btn-fantome" onClick={onFermer}>
-          Annuler
+          {point ? 'Valider · utilise 1 joker' : 'Touche la carte pour choisir'}
         </button>
       </div>
     </div>
@@ -643,17 +698,9 @@ function ModePoche({ actif, onSortir }: { actif: boolean; onSortir: () => void }
   return (
     <div className="poche" onContextMenu={(e) => e.preventDefault()}>
       <p>Mode poche · {actif ? 'position partagée' : 'GPS en attente'}</p>
-      <button
-        className="anneau-sortie"
-        style={{ background: 'none' }}
-        onPointerDown={commencer}
-        onPointerUp={arreter}
-        onPointerCancel={arreter}
-        onPointerLeave={arreter}
-        aria-label="Maintenir pour quitter le mode poche"
-      >
+      <button className="anneau-sortie" onPointerDown={commencer} onPointerUp={arreter} onPointerCancel={arreter} onPointerLeave={arreter} aria-label="Maintenir pour quitter le mode poche">
         <svg className="jauge" width="76" height="76" viewBox="0 0 76 76" aria-hidden>
-          <circle cx="38" cy="38" r="36" stroke="#a1a1aa" strokeWidth="3" fill="none" strokeDasharray={circonference} strokeDashoffset={circonference * (1 - progression)} strokeLinecap="round" />
+          <circle cx="38" cy="38" r="36" stroke="#8e8e93" strokeWidth="3" fill="none" strokeDasharray={circonference} strokeDashoffset={circonference * (1 - progression)} strokeLinecap="round" />
         </svg>
         <Hand size={26} aria-hidden />
       </button>

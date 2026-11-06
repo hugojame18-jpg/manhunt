@@ -1,168 +1,77 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { activerFaussePosition, envoyerPosition, positionInstantanee, positionsAvant, terminerPartie } from './api'
-import { Carte, type Marqueur } from './Carte'
-import { useGeoloc, useWakeLock, type Geoloc } from './hooks'
-import type { PositionDatee } from './jeu'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import {
-  centreZone,
+  Biohazard,
+  Flag,
+  Flame,
+  Hand,
+  Hourglass,
+  LocateFixed,
+  MapPinOff,
+  Maximize2,
+  Moon,
+  Navigation,
+  Radar,
+  Signal,
+  Timer,
+  TriangleAlert,
+  UserCheck,
+  VenetianMask,
+  Zap,
+} from 'lucide-react'
+import { attraper, envoyerPosition, jokerFaux, jokerPing, positionsAvant, terminerPartie } from './api'
+import { Carte, type Hotspot, type Marqueur } from './Carte'
+import { useGeoloc, useWakeLock, type Geoloc } from './hooks'
+import type { Evenement, Joueur, LatLng, Partie, Ping, PositionDatee } from './jeu'
+import {
+  centrePartie,
+  debutChasse,
+  derniersPings,
   distanceM,
+  enAvance,
+  estRunnerEnJeu,
   finPartie,
   formatDistance,
   formatDuree,
-  heureTick,
+  heurePing,
   horsZone,
+  hotspotA,
+  hotspotsOccupes,
   ilYa,
+  jokersDispo,
   parseTs,
-  positionRevelee,
-  prochainTick,
-  tickActuel,
+  pingActuel,
+  prochainPing,
+  runnersEnDirect,
 } from './jeu'
 import type { PropsEcran } from './Lobby'
+import { Avatar, COULEUR_ROLE, MessageErreur, PastilleRole, Spinner, lienPlans, useAction, useConfirm } from './ui'
 
-const BLEU = '#2563eb'
-const ORANGE = '#ea580c'
 const ROUGE = '#dc2626'
+const VIOLET = '#7c3aed'
 
-export function Jeu(props: PropsEcran) {
-  const geo = useGeoloc(true)
-  useWakeLock(true)
-  return (
-    <div className="page jeu">
-      <Entete {...props} />
-      <Alertes {...props} geo={geo} />
-      {props.moi.role === 'runner' ? <VueRunner {...props} geo={geo} /> : <VueChasseur {...props} geo={geo} />}
-    </div>
-  )
-}
+type Confirmer = ReturnType<typeof useConfirm>[1]
 
-function Entete({ partie, moi, now, recharger }: PropsEcran) {
-  const fin = finPartie(partie) ?? now
-  const prochain = prochainTick(partie, now)
-  const admin = partie.admin_id === moi.id
-  return (
-    <div className="entete">
-      <div>
-        <div className="petit">Fin dans</div>
-        <div className="chrono">{formatDuree(fin - now)}</div>
-      </div>
-      <div className="role">{moi.role === 'runner' ? '🏃 Runner' : '🔎 Chasseur'}</div>
-      <div className="droite">
-        <div className="petit">Prochaine révélation</div>
-        <div className="chrono">{prochain ? formatDuree(prochain - now) : '—'}</div>
-        {admin && (
-          <button
-            className="mini danger"
-            onClick={() => {
-              if (confirm('Terminer la partie maintenant pour tout le monde ?')) {
-                void terminerPartie(partie.id).then(recharger)
-              }
-            }}
-          >
-            Terminer
-          </button>
-        )}
-      </div>
-    </div>
-  )
-}
+/** Dernière position de chaque joueur reçue avant l'heure du ping n (mise en cache : elle ne change plus). */
+const cachePings = new Map<string, PositionDatee[]>()
 
-function Alertes({ partie, geo }: PropsEcran & { geo: Geoloc }) {
-  const dehors = geo.position !== null && horsZone(geo.position, partie)
-  return (
-    <>
-      {geo.erreur && <div className="bandeau rouge">{geo.erreur}</div>}
-      {!geo.erreur && !geo.position && <div className="bandeau">Recherche du GPS…</div>}
-      {geo.position && !geo.precise && (
-        <div className="bandeau jaune">
-          Position imprécise (± {Math.round(geo.position.accuracy)} m) : ignorée tant qu'elle dépasse 50 m.
-        </div>
-      )}
-      {dehors && <div className="bandeau rouge gros">⚠️ Tu es HORS de la zone ! Reviens dedans.</div>}
-    </>
-  )
-}
-
-function VueRunner({ partie, moi, now, recharger, geo }: PropsEcran & { geo: Geoloc }) {
-  const [erreur, setErreur] = useState<string | null>(null)
-  const geoRef = useRef(geo)
-  geoRef.current = geo
-  const [dernierEnvoi, setDernierEnvoi] = useState<number | null>(null)
-
-  // Envoi de la position toutes les 5 s (seulement si précise à 50 m près).
+function usePositionsAuPing(p: Partie, n: number, actif: boolean): PositionDatee[] | null {
+  const cle = `${p.id}:${p.chasse_at}:${n}`
+  const [positions, setPositions] = useState<PositionDatee[] | null>(() => cachePings.get(cle) ?? null)
+  const heure = heurePing(p, n)
   useEffect(() => {
-    const envoyer = () => {
-      const g = geoRef.current
-      if (!g.position || !g.precise) return
-      envoyerPosition(partie.id, moi.id, g.position.lat, g.position.lng, g.position.accuracy)
-        .then(() => setDernierEnvoi(Date.now()))
-        .catch(() => undefined)
+    if (!actif || n < 1) return
+    const enCache = cachePings.get(cle)
+    if (enCache) {
+      setPositions(enCache)
+      return
     }
-    const id = window.setInterval(envoyer, 5000)
-    const t = window.setTimeout(envoyer, 1500)
-    return () => {
-      window.clearInterval(id)
-      window.clearTimeout(t)
-    }
-  }, [partie.id, moi.id])
-
-  const n = tickActuel(partie, now)
-  const bonusEnAttente = moi.faux_tick !== null && moi.faux_tick > n
-  const bonusDispo = moi.faux_tick === null
-  const resteTick = prochainTick(partie, now) !== null
-
-  const activer = async () => {
-    if (!confirm('Activer la fausse position ?\nLa prochaine révélation montrera une fausse position aux chasseurs. Une seule fois par partie.')) return
-    setErreur(null)
-    try {
-      await activerFaussePosition(moi.id)
-      await recharger()
-    } catch (e) {
-      setErreur(e instanceof Error ? e.message : 'Erreur')
-    }
-  }
-
-  const marqueurs = useMemo<Marqueur[]>(
-    () => (geo.position ? [{ id: 'moi', pos: geo.position, couleur: BLEU, label: 'Moi' }] : []),
-    [geo.position],
-  )
-  const zone = useMemo(() => ({ centre: centreZone(partie), rayon: partie.zone_rayon_m }), [partie])
-
-  return (
-    <>
-      <Carte zone={zone} marqueurs={marqueurs} />
-      <div className="panneau">
-        {bonusEnAttente && <div className="bandeau violet">🎭 Bonus actif : la prochaine révélation sera faussée</div>}
-        {bonusDispo && (
-          <button className="violet" onClick={() => void activer()} disabled={!resteTick}>
-            🎭 Activer la fausse position
-          </button>
-        )}
-        {!bonusDispo && !bonusEnAttente && <p className="aide">Bonus fausse position déjà utilisé.</p>}
-        {erreur && <p className="erreur">{erreur}</p>}
-        <p className="aide">
-          {dernierEnvoi ? `Position envoyée ${ilYa(Date.now() - dernierEnvoi)}` : 'Position pas encore envoyée'} · garde
-          l'écran allumé et Safari ouvert.
-        </p>
-      </div>
-    </>
-  )
-}
-
-function VueChasseur({ partie, joueurs, moi, now, recharger, geo }: PropsEcran & { geo: Geoloc }) {
-  const [erreur, setErreur] = useState<string | null>(null)
-  const [cible, setCible] = useState('')
-  const [revelees, setRevelees] = useState<{ tick: number; positions: PositionDatee[] } | null>(null)
-  const n = tickActuel(partie, now)
-  const runners = useMemo(() => joueurs.filter((j) => j.role === 'runner'), [joueurs])
-
-  // À chaque nouveau tick : on récupère la dernière position de chaque runner reçue avant l'heure du tick.
-  useEffect(() => {
-    if (n < 1) return
+    setPositions(null)
     let annule = false
     const charger = () =>
-      positionsAvant(partie.id, heureTick(partie, n))
-        .then((positions) => {
-          if (!annule) setRevelees({ tick: n, positions })
+      positionsAvant(p.id, heure)
+        .then((res) => {
+          cachePings.set(cle, res)
+          if (!annule) setPositions(res)
         })
         .catch(() => {
           if (!annule) window.setTimeout(charger, 3000)
@@ -172,105 +81,495 @@ function VueChasseur({ partie, joueurs, moi, now, recharger, geo }: PropsEcran &
       annule = true
       window.clearTimeout(t)
     }
-  }, [n, partie])
+  }, [cle, actif, n, heure, p.id])
+  return n >= 1 ? positions : null
+}
 
-  const heureRevelation = n >= 1 ? heureTick(partie, n) : null
-  const minutes = heureRevelation ? Math.floor((now - heureRevelation) / 60_000) : 0
+/** Envoie ma position toutes les 5 s (si précise à 50 m), avec l'info hors zone / hotspot. */
+function usePartagePosition(moi: Joueur, partie: Partie, geo: Geoloc): number | null {
+  const ref = useRef({ geo, partie, moi })
+  ref.current = { geo, partie, moi }
+  const [dernierEnvoi, setDernierEnvoi] = useState<number | null>(null)
+  useEffect(() => {
+    const envoyer = () => {
+      const { geo: g, partie: p, moi: m } = ref.current
+      if (!g.position || !g.precise) return
+      const runner = estRunnerEnJeu(m)
+      envoyerPosition(m.id, g.position, horsZone(g.position, p), runner ? hotspotA(g.position, p.hotspots) : null)
+        .then(() => setDernierEnvoi(Date.now()))
+        .catch(() => undefined)
+    }
+    const id = window.setInterval(envoyer, 5000)
+    const t = window.setTimeout(envoyer, 1500)
+    return () => {
+      window.clearInterval(id)
+      window.clearTimeout(t)
+    }
+  }, [])
+  return dernierEnvoi
+}
 
-  const lignes = useMemo(
-    () =>
-      runners.map((r) => {
-        const vraie = revelees?.positions.find((p) => p.joueur_id === r.id)
-        const pos = vraie && revelees ? positionRevelee(r, vraie, revelees.tick, partie) : null
-        return { runner: r, pos }
-      }),
-    [runners, revelees, partie],
-  )
+interface Contexte {
+  props: PropsEcran
+  geo: Geoloc
+  n: number
+  pings: Map<string, Ping>
+  direct: Joueur[]
+  centrerSur: (pos: LatLng) => void
+  confirmer: Confirmer
+  dernierEnvoi: number | null
+}
 
-  const finInstant = moi.instant_at ? parseTs(moi.instant_at) + partie.duree_instant_s * 1000 : 0
-  const instantVisible = moi.instant_at !== null && now < finInstant && moi.instant_lat !== null && moi.instant_lng !== null
-  const cibleInstant = runners.find((r) => r.id === moi.instant_cible_id)
+export function Jeu(props: PropsEcran) {
+  const { partie, joueurs, evenements, moi, now, recharger } = props
+  const geo = useGeoloc(true)
+  useWakeLock(true)
+  const dernierEnvoi = usePartagePosition(moi, partie, geo)
+  const [recadrer, setRecadrer] = useState(0)
+  const [centrer, setCentrer] = useState<{ pos: LatLng; n: number } | null>(null)
+  const [poche, setPoche] = useState(false)
+  const [modal, confirmer] = useConfirm()
+  const admin = partie.admin_id === moi.id
+  const vueChasseur = moi.role === 'chasseur' || moi.statut === 'attrape'
+  const runnerEnJeu = estRunnerEnJeu(moi)
 
+  const centrerSur = (pos: LatLng) => setCentrer((c) => ({ pos, n: (c?.n ?? 0) + 1 }))
+
+  const avance = enAvance(partie, now)
+  const chasse = debutChasse(partie) ?? now
+  const fin = finPartie(partie) ?? now
+  const n = pingActuel(partie, now)
+  const prochain = prochainPing(partie, now)
+  const debutCycle = n >= 1 ? heurePing(partie, n) : avance ? parseTs(partie.started_at ?? '') : chasse
+  const cible = avance ? chasse : prochain
+  const progression = cible ? Math.min(1, Math.max(0, (now - debutCycle) / (cible - debutCycle))) : 1
+
+  const positionsAuPing = usePositionsAuPing(partie, n, vueChasseur)
+  const pings = useMemo(() => derniersPings(partie, joueurs, evenements, positionsAuPing, n), [partie, joueurs, evenements, positionsAuPing, n])
+  const direct = useMemo(() => runnersEnDirect(partie, joueurs, now), [partie, joueurs, now])
+  const occupes = useMemo(() => hotspotsOccupes(partie, joueurs, now), [partie, joueurs, now])
+
+  const dehors = geo.position !== null && horsZone(geo.position, partie)
+  const monHotspot = geo.position && runnerEnJeu ? hotspotA(geo.position, partie.hotspots) : null
+
+  const minuteCle = Math.floor(now / 30_000)
   const marqueurs = useMemo<Marqueur[]>(() => {
     const m: Marqueur[] = []
-    for (const l of lignes) {
-      if (l.pos) m.push({ id: l.runner.id, pos: l.pos, couleur: ORANGE, label: `${l.runner.pseudo} · ${minutes < 1 ? 'maintenant' : `${minutes} min`}` })
+    if (vueChasseur) {
+      const enDirect = new Set(direct.map((d) => d.id))
+      for (const [id, ping] of pings) {
+        if (enDirect.has(id)) continue
+        const pseudo = joueurs.find((j) => j.id === id)?.pseudo ?? '?'
+        const age = Math.floor((Date.now() - ping.at) / 60_000)
+        const quand = age < 1 ? 'à l’instant' : `${age} min`
+        m.push({ id: `ping-${id}`, pos: ping, type: 'joueur', nom: pseudo, detail: ping.source === 'ping' ? quand : `${ping.source === 'joker' ? 'joker' : 'hotspot'} · ${quand}`, couleur: COULEUR_ROLE.runner })
+      }
+      for (const d of direct) {
+        if (d.derniere_lat === null || d.derniere_lng === null) continue
+        m.push({ id: `direct-${d.id}`, pos: { lat: d.derniere_lat, lng: d.derniere_lng }, type: 'direct', nom: d.pseudo, detail: 'en direct', couleur: ROUGE })
+      }
     }
-    if (instantVisible && moi.instant_lat !== null && moi.instant_lng !== null) {
-      m.push({
-        id: 'instant',
-        pos: { lat: moi.instant_lat, lng: moi.instant_lng },
-        couleur: ROUGE,
-        label: `⚡ ${cibleInstant?.pseudo ?? 'cible'}`,
-        rayon: 13,
-      })
-    }
-    if (geo.position) m.push({ id: 'moi', pos: geo.position, couleur: BLEU, label: 'Moi', rayon: 8 })
+    if (geo.position) m.push({ id: 'moi', pos: { lat: geo.position.lat, lng: geo.position.lng }, type: 'moi' })
     return m
-  }, [lignes, minutes, instantVisible, moi.instant_lat, moi.instant_lng, cibleInstant, geo.position])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vueChasseur, pings, direct, geo.position?.lat, geo.position?.lng, minuteCle, joueurs])
 
-  const zone = useMemo(() => ({ centre: centreZone(partie), rayon: partie.zone_rayon_m }), [partie])
+  const hotspots = useMemo<Hotspot[]>(
+    () =>
+      partie.hotspots
+        .map(([lat, lng], i) => ({ pos: { lat, lng }, occupe: occupes.has(i) || monHotspot === i, i }))
+        .filter((h) => !vueChasseur || occupes.has(h.i)),
+    [partie.hotspots, occupes, monHotspot, vueChasseur],
+  )
 
-  const declencher = async () => {
-    if (!cible) return
-    const nom = runners.find((r) => r.id === cible)?.pseudo ?? ''
-    if (!confirm(`Révéler la position actuelle de ${nom} ?\nUne seule fois par partie, visible ${partie.duree_instant_s} s.`)) return
-    setErreur(null)
-    try {
-      await positionInstantanee(moi.id, cible)
+  const terminer = async () => {
+    const ok = await confirmer({
+      titre: 'Terminer la partie ?',
+      message: 'La partie s’arrête tout de suite pour tout le monde et le récap s’affiche.',
+      confirmer: 'Terminer',
+      ton: 'danger',
+      icone: Flag,
+    })
+    if (ok) void terminerPartie(partie.id).then(recharger)
+  }
+
+  const ctx: Contexte = { props, geo, n, pings, direct, centrerSur, confirmer, dernierEnvoi }
+  const infecte = moi.role_initial === 'runner' && moi.role === 'chasseur'
+
+  return (
+    <div className="ecran">
+      {modal}
+      {poche && <ModePoche actif={dernierEnvoi !== null && Date.now() - dernierEnvoi < 20_000} onSortir={() => setPoche(false)} />}
+      <Carte zone={partie.zone_poly} centreDefaut={centrePartie(partie)} hotspots={hotspots} marqueurs={marqueurs} recadrer={recadrer} centrer={centrer} margeHaut={130}>
+        <div className="flottant-haut">
+          <div className="hud">
+            <div className="hud-ligne">
+              <div className="compteur">
+                <small>
+                  <Timer size={13} aria-hidden /> Fin
+                </small>
+                <strong>{formatDuree(fin - now)}</strong>
+              </div>
+              <PastilleRole role={moi.role} />
+              <div className="compteur droite">
+                <small>
+                  {avance ? <Hourglass size={13} aria-hidden /> : <Radar size={13} aria-hidden />} {avance ? 'Chasse' : 'Ping'}
+                </small>
+                <strong>{avance ? formatDuree(chasse - now) : prochain ? formatDuree(prochain - now) : '—'}</strong>
+              </div>
+            </div>
+            <div className="progression" aria-hidden>
+              <div style={{ width: `${progression * 100}%` }} />
+            </div>
+          </div>
+          {avance && (
+            <div className={`alerte ${moi.role === 'chasseur' ? 'ambre' : ''}`}>
+              <Hourglass size={20} aria-hidden />
+              {moi.role === 'chasseur' ? `Les runners prennent leur avance. Ne bouge pas avant ${formatDuree(chasse - now)} !` : `C'est ton avance : fuis ! La chasse commence dans ${formatDuree(chasse - now)}.`}
+            </div>
+          )}
+          {moi.statut === 'attrape' && (
+            <div className="alerte">
+              <UserCheck size={20} aria-hidden /> Tu as été attrapé. Tu suis la partie en spectateur.
+            </div>
+          )}
+          {infecte && (
+            <div className="alerte">
+              <Biohazard size={20} aria-hidden /> Tu as été infecté : tu chasses maintenant les runners !
+            </div>
+          )}
+          {dehors && (
+            <div className="alerte rouge forte" role="alert">
+              <TriangleAlert size={22} aria-hidden />
+              {runnerEnJeu && partie.limite_dehors
+                ? `Hors zone : visible en direct ! ${formatDuree(Math.max(0, partie.dehors_max_min * 60 - moi.dehors_s) * 1000)} restantes`
+                : 'Tu es hors de la zone ! Reviens dedans.'}
+            </div>
+          )}
+          {geo.erreur && (
+            <div className="alerte rouge" role="alert">
+              <MapPinOff size={20} aria-hidden /> {geo.erreur}
+            </div>
+          )}
+          {!geo.erreur && !geo.position && (
+            <div className="alerte">
+              <Spinner /> Recherche du GPS…
+            </div>
+          )}
+          {geo.position && !geo.precise && (
+            <div className="alerte ambre">
+              <Signal size={20} aria-hidden /> Position imprécise (± {Math.round(geo.position.accuracy)} m) : pas envoyée tant qu'elle dépasse 50 m.
+            </div>
+          )}
+        </div>
+        <div className="actions-carte">
+          {geo.position && (
+            <button className="btn-icone rond" aria-label="Centrer sur moi" onClick={() => geo.position && centrerSur({ lat: geo.position.lat, lng: geo.position.lng })}>
+              <LocateFixed size={22} aria-hidden />
+            </button>
+          )}
+          <button className="btn-icone rond" aria-label="Voir toute la zone" onClick={() => setRecadrer((r) => r + 1)}>
+            <Maximize2 size={20} aria-hidden />
+          </button>
+        </div>
+      </Carte>
+
+      <div className="feuille">
+        {runnerEnJeu ? (
+          <VueRunner ctx={ctx} monHotspot={monHotspot} />
+        ) : (
+          <VueChasseur ctx={ctx} spectateur={moi.statut === 'attrape'} />
+        )}
+        <button className="btn btn-secondaire" onClick={() => setPoche(true)}>
+          <Moon size={20} aria-hidden />
+          Mode poche (écran noir)
+        </button>
+        {admin && (
+          <button className="btn btn-fantome danger" onClick={() => void terminer()}>
+            <Flag size={18} aria-hidden />
+            Terminer la partie
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function CarteJoker({ couleur, icone, titre, texte, children, actif }: { couleur: string; icone: ReactNode; titre: string; texte: string; children?: ReactNode; actif?: boolean }) {
+  return (
+    <div className={`bonus${actif ? ' actif' : ''}`} style={{ ['--c' as string]: couleur }}>
+      <div className="bonus-tete">
+        <span className="bonus-icone">{icone}</span>
+        <div style={{ flex: 1 }}>
+          <strong>{titre}</strong>
+          <p>{texte}</p>
+        </div>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function VueRunner({ ctx, monHotspot }: { ctx: Contexte; monHotspot: number | null }) {
+  const { props, n, confirmer, dernierEnvoi } = ctx
+  const { partie, moi, now, evenements, recharger } = props
+  const { occupe, erreur, lancer } = useAction()
+  const jokers = jokersDispo(moi, partie)
+  const fauxEnAttente = evenements.some((e: Evenement) => e.type === 'faux' && e.joueur_id === moi.id && e.tick !== null && e.tick > n)
+  const resteUnPing = prochainPing(partie, now) !== null || enAvance(partie, now)
+  const partageActif = dernierEnvoi !== null && Date.now() - dernierEnvoi < 20_000
+
+  const fauxPing = async () => {
+    const ok = await confirmer({
+      titre: 'Faux ping ?',
+      message: 'Au prochain ping, les chasseurs verront une fausse position au lieu de la vraie. Utilise 1 joker.',
+      confirmer: 'Envoyer un faux ping',
+      ton: 'violet',
+      icone: VenetianMask,
+    })
+    if (!ok) return
+    void lancer(async () => {
+      await jokerFaux(moi.id)
       await recharger()
-    } catch (e) {
-      setErreur(e instanceof Error ? e.message : 'Erreur')
-    }
+    })
+  }
+
+  const meDeclarer = async () => {
+    const ok = await confirmer({
+      titre: 'Tu as été attrapé ?',
+      message: partie.mode === 'infection' ? 'Tu deviendras chasseur.' : 'Tu seras éliminé et suivras la partie en spectateur.',
+      confirmer: 'Oui, attrapé',
+      ton: 'danger',
+      icone: UserCheck,
+    })
+    if (ok) void lancer(async () => {
+      await attraper(moi.id)
+      await recharger()
+    })
   }
 
   return (
     <>
-      <Carte zone={zone} marqueurs={marqueurs} />
-      <div className="panneau">
-        {n < 1 && <p className="aide">Première révélation dans {formatDuree(heureTick(partie, 1) - now)}.</p>}
-        {n >= 1 && heureRevelation && (
-          <p className="aide">
-            Révélation n°{n} · {ilYa(now - heureRevelation)}
-          </p>
-        )}
-        <ul className="liste">
-          {lignes.map(({ runner, pos }) => (
-            <li key={runner.id}>
-              <span>
-                🏃 <strong>{runner.pseudo}</strong>
-              </span>
-              <span className="petit">
-                {pos ? (geo.position ? formatDistance(distanceM(geo.position, pos)) : 'révélé') : n < 1 ? 'pas encore révélé' : 'position inconnue'}
-              </span>
-            </li>
-          ))}
-        </ul>
-
-        {instantVisible && (
-          <div className="bandeau rouge">
-            ⚡ {cibleInstant?.pseudo} visible encore {formatDuree(finInstant - now)}
-          </div>
-        )}
-        {moi.instant_at === null ? (
-          <div className="ligne">
-            <select value={cible} onChange={(e) => setCible(e.target.value)}>
-              <option value="">Choisir un runner…</option>
-              {runners.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.pseudo}
-                </option>
-              ))}
-            </select>
-            <button className="rouge" disabled={!cible} onClick={() => void declencher()}>
-              ⚡ Position instantanée
-            </button>
-          </div>
-        ) : (
-          !instantVisible && <p className="aide">Bonus position instantanée déjà utilisé ({cibleInstant?.pseudo}).</p>
-        )}
-        {erreur && <p className="erreur">{erreur}</p>}
+      <div className="statut">
+        <span className={`voyant${partageActif ? ' actif' : ''}`} aria-hidden />
+        {dernierEnvoi ? `Position partagée ${ilYa(Date.now() - dernierEnvoi)}` : 'Position pas encore partagée'}
       </div>
+
+      {monHotspot !== null && (
+        <div className="alerte ambre" style={{ boxShadow: 'none' }}>
+          <Flame size={20} aria-hidden /> Tu es dans un hotspot : +1 joker toutes les 2 min, mais les chasseurs te pingent.
+        </div>
+      )}
+
+      {partie.limite_dehors && moi.dehors_s > 0 && (
+        <div className="statut">
+          <Timer size={18} aria-hidden /> Temps hors zone : {formatDuree(moi.dehors_s * 1000)} / {partie.dehors_max_min}:00
+        </div>
+      )}
+
+      <CarteJoker
+        couleur={VIOLET}
+        icone={<VenetianMask size={22} aria-hidden />}
+        titre={`Jokers : ${jokers}`}
+        texte={
+          fauxEnAttente
+            ? 'Faux ping prêt : le prochain ping montrera une fausse position.'
+            : !resteUnPing
+              ? 'Plus aucun ping avant la fin de la partie.'
+              : 'Au prochain ping, les chasseurs verront une fausse position au lieu de la vraie.'
+        }
+        actif={fauxEnAttente}
+      >
+        {!fauxEnAttente && (
+          <button className="btn btn-violet" disabled={jokers < 1 || occupe || !resteUnPing} onClick={() => void fauxPing()}>
+            {occupe ? <Spinner /> : <VenetianMask size={18} aria-hidden />} Faux ping
+          </button>
+        )}
+      </CarteJoker>
+      <MessageErreur>{erreur}</MessageErreur>
+
+      <button className="btn btn-fantome danger" onClick={() => void meDeclarer()}>
+        <UserCheck size={18} aria-hidden /> J'ai été attrapé
+      </button>
     </>
+  )
+}
+
+function VueChasseur({ ctx, spectateur }: { ctx: Contexte; spectateur: boolean }) {
+  const { props, geo, n, pings, direct, centrerSur, confirmer } = ctx
+  const { partie, joueurs, moi, now, recharger } = props
+  const { occupe, erreur, lancer } = useAction()
+  const runners = joueurs.filter((j) => j.role_initial === 'runner' || j.role === 'runner')
+  const enJeu = runners.filter(estRunnerEnJeu)
+  const jokers = jokersDispo(moi, partie)
+  const avance = enAvance(partie, now)
+
+  const [cible, setCible] = useState<string | null>(null)
+
+  const pingForce = async () => {
+    const r = enJeu.find((j) => j.id === cible)
+    if (!r) return
+    const ok = await confirmer({
+      titre: `Pinger ${r.pseudo} ?`,
+      message: 'Sa position réelle actuelle s’affiche pour tous les chasseurs. Utilise 1 joker.',
+      confirmer: 'Pinger',
+      ton: 'rouge',
+      icone: Zap,
+    })
+    if (ok)
+      void lancer(async () => {
+        await jokerPing(moi.id, r.id)
+        await recharger()
+        setCible(null)
+      })
+  }
+
+  const marquerAttrape = async (r: Joueur) => {
+    const ok = await confirmer({
+      titre: `${r.pseudo} est attrapé ?`,
+      message: partie.mode === 'infection' ? `${r.pseudo} deviendra chasseur.` : `${r.pseudo} sera éliminé.`,
+      confirmer: 'Attrapé !',
+      ton: 'danger',
+      icone: UserCheck,
+    })
+    if (ok)
+      void lancer(async () => {
+        await attraper(r.id)
+        await recharger()
+      })
+  }
+
+  const sousTitre = avance ? 'Les pings commencent au départ de la chasse' : n < 1 ? `1er ping dans ${formatDuree(heurePing(partie, 1) - now)}` : `Ping n°${n} · ${ilYa(now - heurePing(partie, n))}`
+
+  return (
+    <>
+      <div className="feuille-titre">
+        <h2>Runners</h2>
+        <span>{enJeu.length} en jeu</span>
+      </div>
+      <p className="aide" style={{ textAlign: 'left', marginTop: -8 }}>
+        {sousTitre}
+      </p>
+
+      <ul className="liste">
+        {runners.map((r) => {
+          const actifR = estRunnerEnJeu(r)
+          const enDirect = direct.find((d) => d.id === r.id)
+          const ping = pings.get(r.id)
+          const pos: LatLng | null = enDirect && enDirect.derniere_lat !== null && enDirect.derniere_lng !== null ? { lat: enDirect.derniere_lat, lng: enDirect.derniere_lng } : ping ?? null
+          let sous = 'Pas encore pingé'
+          if (!actifR) sous = r.role === 'chasseur' ? 'Infecté · chasseur' : 'Attrapé'
+          else if (enDirect) sous = 'Hors zone · en direct'
+          else if (ping) sous = `${ping.source === 'joker' ? 'Joker' : ping.source === 'hotspot' ? 'Hotspot' : 'Ping'} ${ilYa(now - ping.at)}`
+          if (actifR && pos && geo.position) sous += ` · ${formatDistance(distanceM(geo.position, pos))}`
+          return (
+            <li key={r.id} className={actifR ? '' : 'inactif'}>
+              <button className="ligne-cliquable" onClick={() => pos && centrerSur(pos)} disabled={!pos || !actifR} aria-label={`Voir ${r.pseudo} sur la carte`}>
+                <Avatar nom={r.pseudo} couleur={!actifR ? '#94a3b8' : enDirect ? ROUGE : COULEUR_ROLE.runner} />
+                <span className="corps">
+                  <span className="nom">{r.pseudo}</span>
+                  <span className="sous" style={enDirect ? { color: ROUGE, fontWeight: 700 } : undefined}>
+                    {sous}
+                  </span>
+                </span>
+              </button>
+              {actifR && (
+                <div className="droite">
+                  {pos && (
+                    <a className="btn-icone discret" href={lienPlans(pos.lat, pos.lng)} target="_blank" rel="noreferrer" aria-label={`Itinéraire vers ${r.pseudo} dans Plans`}>
+                      <Navigation size={18} aria-hidden />
+                    </a>
+                  )}
+                  {!spectateur && (
+                    <button className="btn-icone discret" onClick={() => void marquerAttrape(r)} aria-label={`Marquer ${r.pseudo} comme attrapé`}>
+                      <Hand size={18} aria-hidden />
+                    </button>
+                  )}
+                </div>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+
+      {!spectateur && (
+        <CarteJoker couleur={ROUGE} icone={<Zap size={22} aria-hidden />} titre={`Jokers : ${jokers}`} texte={jokers > 0 ? 'Choisis un runner : sa position réelle s’affiche tout de suite pour tous les chasseurs.' : 'Plus de joker disponible.'}>
+          {jokers > 0 && !avance && enJeu.length > 0 && (
+            <>
+              <div className="chips" role="radiogroup" aria-label="Runner à pinger">
+                {enJeu.map((r) => (
+                  <button key={r.id} role="radio" aria-checked={cible === r.id} className={`chip${cible === r.id ? ' actif' : ''}`} onClick={() => setCible(r.id)}>
+                    {r.pseudo}
+                  </button>
+                ))}
+              </div>
+              <button className="btn btn-rouge" disabled={!cible || occupe} onClick={() => void pingForce()}>
+                {occupe ? <Spinner /> : <Zap size={18} aria-hidden />}
+                {cible ? `Pinger ${enJeu.find((r) => r.id === cible)?.pseudo ?? ''}` : 'Choisis un runner'}
+              </button>
+            </>
+          )}
+          {avance && jokers > 0 && <p className="aide" style={{ textAlign: 'left' }}>Utilisable après le départ de la chasse.</p>}
+        </CarteJoker>
+      )}
+      <MessageErreur>{erreur}</MessageErreur>
+    </>
+  )
+}
+
+/** Écran noir : l'app reste active (position envoyée), le téléphone semble éteint. Appui long pour sortir. */
+function ModePoche({ actif, onSortir }: { actif: boolean; onSortir: () => void }) {
+  const [progression, setProgression] = useState(0)
+  const anim = useRef<number | null>(null)
+
+  useEffect(() => {
+    const metas = Array.from(document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'))
+    const avant = metas.map((m) => m.content)
+    metas.forEach((m) => (m.content = '#000000'))
+    document.body.style.background = '#000'
+    return () => {
+      metas.forEach((m, i) => (m.content = avant[i]))
+      document.body.style.background = ''
+      if (anim.current) cancelAnimationFrame(anim.current)
+    }
+  }, [])
+
+  const commencer = (e: ReactPointerEvent) => {
+    e.preventDefault()
+    const debut = performance.now()
+    const boucle = () => {
+      const p = Math.min(1, (performance.now() - debut) / 1500)
+      setProgression(p)
+      if (p >= 1) onSortir()
+      else anim.current = requestAnimationFrame(boucle)
+    }
+    anim.current = requestAnimationFrame(boucle)
+  }
+  const arreter = () => {
+    if (anim.current) cancelAnimationFrame(anim.current)
+    anim.current = null
+    setProgression(0)
+  }
+
+  const circonference = 2 * Math.PI * 36
+  return (
+    <div className="poche" onContextMenu={(e) => e.preventDefault()}>
+      <p>Mode poche · {actif ? 'position partagée' : 'GPS en attente'}</p>
+      <button
+        className="anneau-sortie"
+        style={{ background: 'none' }}
+        onPointerDown={commencer}
+        onPointerUp={arreter}
+        onPointerCancel={arreter}
+        onPointerLeave={arreter}
+        aria-label="Maintenir pour quitter le mode poche"
+      >
+        <svg className="jauge" width="76" height="76" viewBox="0 0 76 76" aria-hidden>
+          <circle cx="38" cy="38" r="36" stroke="#a1a1aa" strokeWidth="3" fill="none" strokeDasharray={circonference} strokeDashoffset={circonference * (1 - progression)} strokeLinecap="round" />
+        </svg>
+        <Hand size={26} aria-hidden />
+      </button>
+      <p>Maintiens le rond appuyé pour rallumer</p>
+    </div>
   )
 }

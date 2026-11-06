@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
+import { Crosshair, LogIn, Plus, Smartphone, WifiOff } from 'lucide-react'
 import { creerPartie, rejoindrePartie, terminerPartie } from './api'
-import { Carte } from './Carte'
-import { useEtatPartie, useGeoloc, useMaintenant } from './hooks'
-import type { LatLng } from './jeu'
+import { Jeu } from './EnJeu'
+import { useEtatPartie, useMaintenant } from './hooks'
 import { estTerminee } from './jeu'
 import { Lobby } from './Lobby'
-import { Jeu } from './EnJeu'
 import { Recap } from './Recap'
+import { MessageErreur, Spinner, useAction } from './ui'
 
 interface Session {
   partieId: string
@@ -51,9 +51,10 @@ function EcranPartie({ session, onQuitter }: { session: Session; onQuitter: () =
 
   if (!etat) {
     return (
-      <div className="page centre">
-        <p>{erreur ?? 'Chargement…'}</p>
-        <button className="secondaire" onClick={onQuitter}>
+      <div className="page page-centre">
+        {erreur ? <WifiOff size={36} aria-hidden /> : <Spinner taille={32} />}
+        <p className="aide">{erreur ? `Connexion impossible : ${erreur}` : 'Connexion à la partie…'}</p>
+        <button className="btn btn-secondaire" onClick={onQuitter}>
           Retour à l'accueil
         </button>
       </div>
@@ -61,17 +62,23 @@ function EcranPartie({ session, onQuitter }: { session: Session; onQuitter: () =
   }
   if (!partie || !moi) {
     return (
-      <div className="page centre">
-        <p>{!partie ? "Cette partie n'existe plus." : "Tu as été retiré de la partie."}</p>
-        <button onClick={onQuitter}>Retour à l'accueil</button>
+      <div className="page page-centre">
+        <h2>{!partie ? "Cette partie n'existe plus" : 'Tu as été retiré de la partie'}</h2>
+        <button className="btn btn-primaire" onClick={onQuitter}>
+          Retour à l'accueil
+        </button>
       </div>
     )
   }
 
-  const props = { partie, joueurs: etat.joueurs, moi, now, recharger, onQuitter }
+  const props = { partie, joueurs: etat.joueurs, evenements: etat.evenements, moi, now, recharger, onQuitter }
   return (
     <>
-      {erreur && <div className="bandeau rouge">Connexion instable : {erreur}</div>}
+      {erreur && (
+        <div className="toast" role="status">
+          <WifiOff size={16} aria-hidden /> Connexion instable…
+        </div>
+      )}
       {partie.statut === 'lobby' && <Lobby {...props} />}
       {partie.statut === 'en_cours' && !finie && <Jeu {...props} />}
       {finie && <Recap {...props} />}
@@ -79,200 +86,120 @@ function EcranPartie({ session, onQuitter }: { session: Session; onQuitter: () =
   )
 }
 
+/** Position actuelle si elle arrive vite (pour centrer la carte du salon), sinon null. */
+function positionRapide(): Promise<{ lat: number; lng: number } | null> {
+  return new Promise((resolve) => {
+    if (!('geolocation' in navigator)) return resolve(null)
+    const t = window.setTimeout(() => resolve(null), 4000)
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        window.clearTimeout(t)
+        resolve({ lat: p.coords.latitude, lng: p.coords.longitude })
+      },
+      () => {
+        window.clearTimeout(t)
+        resolve(null)
+      },
+      { enableHighAccuracy: true, timeout: 4000, maximumAge: 60_000 },
+    )
+  })
+}
+
 function Accueil({ onEntrer }: { onEntrer: (s: Session) => void }) {
   const codeUrl = new URLSearchParams(location.search).get('code') ?? ''
-  const [mode, setMode] = useState<'choix' | 'creer'>('choix')
   const [code, setCode] = useState(codeUrl.toUpperCase())
   const [pseudo, setPseudo] = useState(() => localStorage.getItem('manhunt-pseudo') ?? '')
-  const [erreur, setErreur] = useState<string | null>(null)
-  const [occupe, setOccupe] = useState(false)
+  const rejoindre = useAction()
+  const creer = useAction()
 
-  const memoriserPseudo = (p: string) => localStorage.setItem('manhunt-pseudo', p)
-
-  const rejoindre = async () => {
+  const pseudoValide = (): string | null => {
     const p = pseudo.trim()
-    if (code.trim().length !== 6 || p.length < 2) {
-      setErreur('Il faut un code à 6 caractères et un pseudo (2 caractères minimum).')
-      return
-    }
-    setOccupe(true)
-    setErreur(null)
-    try {
-      const { partie, joueur } = await rejoindrePartie(code.trim().toUpperCase(), p)
-      memoriserPseudo(p)
-      history.replaceState(null, '', location.pathname)
-      onEntrer({ partieId: partie.id, joueurId: joueur.id })
-    } catch (e) {
-      setErreur(e instanceof Error ? e.message : 'Erreur')
-    } finally {
-      setOccupe(false)
-    }
+    if (p.length < 2) return null
+    localStorage.setItem('manhunt-pseudo', p)
+    return p
   }
 
-  if (mode === 'creer') {
-    return (
-      <Creation
-        pseudoInitial={pseudo}
-        onAnnuler={() => setMode('choix')}
-        onCree={(s, p) => {
-          memoriserPseudo(p)
-          onEntrer(s)
-        }}
-      />
-    )
+  const surRejoindre = () => {
+    const p = pseudoValide()
+    if (!p) return rejoindre.setErreur('Choisis un pseudo (2 caractères minimum).')
+    if (code.trim().length !== 6) return rejoindre.setErreur('Le code de la partie fait 6 caractères.')
+    void rejoindre.lancer(async () => {
+      const { partie, joueur } = await rejoindrePartie(code.trim().toUpperCase(), p)
+      history.replaceState(null, '', location.pathname)
+      onEntrer({ partieId: partie.id, joueurId: joueur.id })
+    })
+  }
+
+  const surCreer = () => {
+    const p = pseudoValide()
+    if (!p) return creer.setErreur('Choisis un pseudo (2 caractères minimum).')
+    void creer.lancer(async () => {
+      const centre = await positionRapide()
+      const { partie, joueur } = await creerPartie(p, centre)
+      onEntrer({ partieId: partie.id, joueurId: joueur.id })
+    })
   }
 
   return (
     <div className="page">
-      <h1>Manhunt</h1>
-      <p className="sous-titre">Chasse à l'homme entre potes</p>
+      <header className="hero">
+        <div className="radar" aria-hidden />
+        <div className="logo">
+          <Crosshair size={38} strokeWidth={2.2} aria-hidden />
+        </div>
+        <h1>Manhunt</h1>
+        <p>La chasse à l'homme entre potes</p>
+      </header>
 
-      <section className="carton">
-        <h2>Rejoindre une partie</h2>
-        <label>
-          Code de la partie
+      <section className="bloc">
+        <label className="champ">
+          <span>Ton pseudo</span>
+          <input value={pseudo} onChange={(e) => setPseudo(e.target.value)} maxLength={20} placeholder="Ex. Léo" autoComplete="nickname" />
+        </label>
+      </section>
+
+      <form
+        className="bloc"
+        onSubmit={(e) => {
+          e.preventDefault()
+          surRejoindre()
+        }}
+      >
+        <div className="bloc-titre">
+          <h2>Rejoindre une partie</h2>
+        </div>
+        <label className="champ champ-code">
+          <span>Code de la partie</span>
           <input
             value={code}
-            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
             maxLength={6}
             autoCapitalize="characters"
             autoCorrect="off"
-            placeholder="ABC123"
-            className="code-input"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="······"
           />
         </label>
-        <label>
-          Ton pseudo
-          <input value={pseudo} onChange={(e) => setPseudo(e.target.value)} maxLength={20} placeholder="Pseudo" />
-        </label>
-        <button onClick={() => void rejoindre()} disabled={occupe}>
+        <MessageErreur>{rejoindre.erreur}</MessageErreur>
+        <button type="submit" className="btn btn-primaire" disabled={rejoindre.occupe}>
+          {rejoindre.occupe ? <Spinner /> : <LogIn size={20} aria-hidden />}
           Rejoindre
         </button>
-      </section>
+      </form>
 
-      <section className="carton">
-        <h2>Nouvelle partie</h2>
-        <button className="secondaire" onClick={() => setMode('creer')}>
-          Créer une partie
-        </button>
-      </section>
+      <div className="separateur">ou</div>
 
-      {erreur && <p className="erreur">{erreur}</p>}
-    </div>
-  )
-}
+      <MessageErreur>{creer.erreur}</MessageErreur>
+      <button className="btn btn-secondaire" onClick={surCreer} disabled={creer.occupe}>
+        {creer.occupe ? <Spinner /> : <Plus size={20} aria-hidden />}
+        Créer une partie
+      </button>
 
-function Creation({
-  pseudoInitial,
-  onAnnuler,
-  onCree,
-}: {
-  pseudoInitial: string
-  onAnnuler: () => void
-  onCree: (s: Session, pseudo: string) => void
-}) {
-  const geo = useGeoloc(true)
-  const [pseudo, setPseudo] = useState(pseudoInitial)
-  const [centre, setCentre] = useState<LatLng | null>(null)
-  const [rayon, setRayon] = useState(500)
-  const [duree, setDuree] = useState(30)
-  const [intervalle, setIntervalle] = useState(5)
-  const [recadrer, setRecadrer] = useState(0)
-  const [erreur, setErreur] = useState<string | null>(null)
-  const [occupe, setOccupe] = useState(false)
-
-  // Par défaut, la zone est centrée sur ma position dès qu'elle est connue.
-  useEffect(() => {
-    if (!centre && geo.position) {
-      setCentre({ lat: geo.position.lat, lng: geo.position.lng })
-      setRecadrer((r) => r + 1)
-    }
-  }, [centre, geo.position])
-
-  const creer = async () => {
-    const p = pseudo.trim()
-    if (p.length < 2) return setErreur('Choisis un pseudo (2 caractères minimum).')
-    if (!centre) return setErreur('Touche la carte pour placer le centre de la zone.')
-    if (intervalle >= duree) return setErreur("L'intervalle entre les révélations doit être plus court que la partie.")
-    setOccupe(true)
-    setErreur(null)
-    try {
-      const { partie, joueur } = await creerPartie({
-        pseudo: p,
-        zone_lat: centre.lat,
-        zone_lng: centre.lng,
-        zone_rayon_m: rayon,
-        duree_min: duree,
-        intervalle_min: intervalle,
-      })
-      onCree({ partieId: partie.id, joueurId: joueur.id }, p)
-    } catch (e) {
-      setErreur(e instanceof Error ? e.message : 'Erreur')
-      setOccupe(false)
-    }
-  }
-
-  return (
-    <div className="page jeu">
-      <div className="entete">
-        <button className="lien" onClick={onAnnuler}>
-          ‹ Retour
-        </button>
-        <strong>Nouvelle partie</strong>
-        <span />
-      </div>
-      <p className="aide">Touche la carte pour placer le centre de la zone de jeu.</p>
-      <Carte
-        zone={centre ? { centre, rayon } : null}
-        marqueurs={geo.position ? [{ id: 'moi', pos: geo.position, couleur: '#2563eb', rayon: 8 }] : []}
-        onClic={setCentre}
-        recadrer={recadrer}
-      />
-      <div className="panneau">
-        <label>
-          Ton pseudo
-          <input value={pseudo} onChange={(e) => setPseudo(e.target.value)} maxLength={20} />
-        </label>
-        <label>
-          Rayon de la zone : <strong>{rayon} m</strong>
-          <input
-            type="range"
-            min={100}
-            max={3000}
-            step={50}
-            value={rayon}
-            onChange={(e) => setRayon(Number(e.target.value))}
-            onPointerUp={() => setRecadrer((r) => r + 1)}
-          />
-        </label>
-        <div className="ligne">
-          <label>
-            Durée (min)
-            <select value={duree} onChange={(e) => setDuree(Number(e.target.value))}>
-              {[5, 10, 15, 20, 30, 45, 60, 90, 120].map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Révélation toutes les (min)
-            <select value={intervalle} onChange={(e) => setIntervalle(Number(e.target.value))}>
-              {[1, 2, 3, 4, 5, 6, 8, 10, 15].map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {geo.erreur && <p className="erreur">{geo.erreur}</p>}
-        {erreur && <p className="erreur">{erreur}</p>}
-        <button onClick={() => void creer()} disabled={occupe}>
-          Créer la partie
-        </button>
-      </div>
+      <p className="note" style={{ marginTop: 'auto' }}>
+        <Smartphone size={18} aria-hidden />
+        Pendant la partie, garde Safari ouvert. Le mode poche éteint l'écran sans couper la position.
+      </p>
     </div>
   )
 }

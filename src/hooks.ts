@@ -84,7 +84,7 @@ export function useGeoloc(actif: boolean): Geoloc {
           ...s,
           erreur:
             e.code === e.PERMISSION_DENIED
-              ? "Position refusée. Sur iPhone : Réglages › Confidentialité et sécurité › Service de localisation › Sites web Safari › « Lorsque l'app est active », puis recharge la page."
+              ? "Position refusée. Réglages › Confidentialité › Service de localisation › Sites web Safari : « Lorsque l'app est active », puis recharge."
               : 'Position GPS indisponible pour le moment…',
         })),
       { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 },
@@ -110,11 +110,16 @@ export function useWakeLock(actif: boolean): void {
       }
     }
     void demander()
-    const auRetour = () => void demander()
+    const auRetour = () => {
+      if (!verrou.current || verrou.current.released) void demander()
+    }
+    // Safari exige parfois un geste : on redemande au premier toucher.
     document.addEventListener('visibilitychange', auRetour)
+    document.addEventListener('pointerdown', auRetour)
     return () => {
       annule = true
       document.removeEventListener('visibilitychange', auRetour)
+      document.removeEventListener('pointerdown', auRetour)
       void verrou.current?.release()
       verrou.current = null
     }

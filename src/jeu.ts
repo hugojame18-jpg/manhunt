@@ -263,11 +263,11 @@ export function derniersPings(
   for (const r of runners) {
     let meilleur: Ping | null = null
     const vraie = n >= 1 ? positionsAuPing?.find((q) => q.joueur_id === r.id) : undefined
-    if (vraie) {
-      const faux = evenements.find((e) => e.type === 'faux' && e.joueur_id === r.id && e.tick === n)
-      const pos = faux && faux.dx !== null && faux.dy !== null ? positionFausse(vraie, faux.dx, faux.dy, p) : vraie
-      meilleur = { runnerId: r.id, lat: pos.lat, lng: pos.lng, at: t, source: 'ping', numero: n }
-    }
+    const faux = n >= 1 ? evenements.find((e) => e.type === 'faux' && e.joueur_id === r.id && e.tick === n) : undefined
+    let pos: LatLng | null = vraie ?? null
+    if (faux && faux.lat !== null && faux.lng !== null) pos = { lat: faux.lat, lng: faux.lng } // position choisie par le runner
+    else if (faux && vraie && faux.dx !== null && faux.dy !== null) pos = positionFausse(vraie, faux.dx, faux.dy, p)
+    if (pos) meilleur = { runnerId: r.id, lat: pos.lat, lng: pos.lng, at: t, source: 'ping', numero: n }
     for (const e of evenements) {
       if ((e.type !== 'joker_ping' && e.type !== 'hotspot_ping') || e.cible_id !== r.id || e.lat === null || e.lng === null) continue
       const at = parseTs(e.created_at)

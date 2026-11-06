@@ -17,7 +17,7 @@ Chasse à l'homme entre potes, dans le navigateur (pensé pour Safari sur iPhone
 - **Avance des runners** : au lancement, les runners ont quelques minutes pour fuir. Les pings démarrent après.
 - **Pings** : toutes les N minutes, les chasseurs voient la position des runners à ce moment-là.
 - **Joker chasseur** : ping réel immédiat du runner choisi, visible par tous les chasseurs.
-- **Joker runner** : le prochain ping montre une fausse position (à 300 m maximum, dans la zone).
+- **Joker runner** : le runner choisit sur la carte une fausse position (n’importe où dans la zone) ; au prochain ping, les chasseurs le voient là. Nombre de jokers réglé dans le salon (1 par défaut).
 - **Zone de jeu** (facultative) : polygone dessiné sur la carte par l'hôte.
 - **Temps limite hors zone** (facultatif) : un runner hors zone est visible en direct par les chasseurs ; une fois le temps cumulé autorisé écoulé, il est attrapé.
 - **Hotspots** (facultatifs) : un runner qui reste dans un hotspot est pingé toutes les 2 minutes et gagne un joker à chaque fois. Les chasseurs ne voient un hotspot que lorsqu'un runner est dedans.

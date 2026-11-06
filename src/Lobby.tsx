@@ -54,7 +54,7 @@ export const INFOS: Record<string, Omit<OptionsConfirm, 'confirmer'>> = {
   jokerRunner: {
     titre: 'Joker runner',
     message:
-      'Un joker permet au runner d’envoyer une fausse position au lieu de la vraie au prochain ping, pour tromper les chasseurs.',
+      'Un joker permet au runner de choisir sur la carte une fausse position (dans la zone) : au prochain ping, les chasseurs le verront là au lieu de sa vraie position.',
   },
   avance: {
     titre: 'Avance des runners',

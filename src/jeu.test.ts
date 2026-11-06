@@ -148,6 +148,16 @@ describe('jokers et pings', () => {
     expect(derniersPings(partie, [leo], faux, au1, 1).get('leo')?.lng).not.toBe(2.35)
     expect(derniersPings(partie, [leo], faux, au1, 2).get('leo')?.lng).toBe(2.35)
   })
+  it('la fausse position choisie par le runner remplace le ping visé, et seulement lui', () => {
+    const faux = [evt({ type: 'faux', joueur_id: 'leo', tick: 1, lat: 48.8515, lng: 2.3485 })]
+    const p1 = derniersPings(partie, [leo], faux, au1, 1).get('leo')
+    expect([p1?.lat, p1?.lng]).toEqual([48.8515, 2.3485])
+    expect(derniersPings(partie, [leo], faux, au1, 2).get('leo')?.lat).toBe(48.85)
+  })
+  it('le faux ping fonctionne même si le runner n’a pas encore envoyé de position', () => {
+    const faux = [evt({ type: 'faux', joueur_id: 'leo', tick: 1, lat: 48.8515, lng: 2.3485 })]
+    expect(derniersPings(partie, [leo], faux, [], 1).get('leo')?.lat).toBe(48.8515)
+  })
   it('un joker de chasseur plus récent remplace le ping régulier', () => {
     const joker = [evt({ cible_id: 'leo', lat: 48.851, lng: 2.351, created_at: '2026-11-06T10:10:00+00:00' })]
     expect(derniersPings(partie, [leo], joker, au1, 1).get('leo')?.source).toBe('joker')

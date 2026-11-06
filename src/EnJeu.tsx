@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import {
   Biohazard,
+  Check,
   Flag,
   Flame,
   Hand,
@@ -16,6 +17,7 @@ import {
   TriangleAlert,
   UserCheck,
   VenetianMask,
+  X,
   Zap,
 } from 'lucide-react'
 import { attraper, envoyerPosition, jokerFaux, jokerPing, positionsAvant, terminerPartie } from './api'
@@ -118,6 +120,7 @@ interface Contexte {
   centrerSur: (pos: LatLng) => void
   confirmer: Confirmer
   dernierEnvoi: number | null
+  ouvrirFauxPing: () => void
 }
 
 export function Jeu(props: PropsEcran) {
@@ -128,6 +131,7 @@ export function Jeu(props: PropsEcran) {
   const [recadrer, setRecadrer] = useState(0)
   const [centrer, setCentrer] = useState<{ pos: LatLng; n: number } | null>(null)
   const [poche, setPoche] = useState(false)
+  const [choixFaux, setChoixFaux] = useState(false)
   const [modal, confirmer] = useConfirm()
   const admin = partie.admin_id === moi.id
   const vueChasseur = moi.role === 'chasseur' || moi.statut === 'attrape'
@@ -149,6 +153,11 @@ export function Jeu(props: PropsEcran) {
   const direct = useMemo(() => runnersEnDirect(partie, joueurs, now), [partie, joueurs, now])
   const occupes = useMemo(() => hotspotsOccupes(partie, joueurs, now), [partie, joueurs, now])
 
+  // Fausse position déjà choisie pour le prochain ping (affichée au runner pour qu'il s'en souvienne).
+  const fauxPrevu = runnerEnJeu
+    ? evenements.find((e) => e.type === 'faux' && e.joueur_id === moi.id && e.tick !== null && e.tick > n && e.lat !== null && e.lng !== null)
+    : undefined
+
   const dehors = geo.position !== null && horsZone(geo.position, partie)
   const monHotspot = geo.position && runnerEnJeu ? hotspotA(geo.position, partie.hotspots) : null
 
@@ -169,10 +178,13 @@ export function Jeu(props: PropsEcran) {
         m.push({ id: `direct-${d.id}`, pos: { lat: d.derniere_lat, lng: d.derniere_lng }, type: 'direct', nom: d.pseudo, detail: 'en direct', couleur: ROUGE })
       }
     }
+    if (fauxPrevu && fauxPrevu.lat !== null && fauxPrevu.lng !== null) {
+      m.push({ id: 'faux', pos: { lat: fauxPrevu.lat, lng: fauxPrevu.lng }, type: 'joueur', nom: moi.pseudo, detail: 'faux ping', couleur: VIOLET })
+    }
     if (geo.position) m.push({ id: 'moi', pos: { lat: geo.position.lat, lng: geo.position.lng }, type: 'moi' })
     return m
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vueChasseur, pings, direct, geo.position?.lat, geo.position?.lng, minuteCle, joueurs])
+  }, [vueChasseur, pings, direct, geo.position?.lat, geo.position?.lng, minuteCle, joueurs, fauxPrevu?.id])
 
   const hotspots = useMemo<Hotspot[]>(
     () =>
@@ -193,8 +205,12 @@ export function Jeu(props: PropsEcran) {
     if (ok) void terminerPartie(partie.id).then(recharger)
   }
 
-  const ctx: Contexte = { props, geo, n, pings, direct, centrerSur, confirmer, dernierEnvoi }
+  const ctx: Contexte = { props, geo, n, pings, direct, centrerSur, confirmer, dernierEnvoi, ouvrirFauxPing: () => setChoixFaux(true) }
   const infecte = moi.role_initial === 'runner' && moi.role === 'chasseur'
+
+  if (choixFaux && runnerEnJeu) {
+    return <ChoixFaussePosition partie={partie} moi={moi} geo={geo} recharger={recharger} onFermer={() => setChoixFaux(false)} />
+  }
 
   return (
     <div className="ecran">
@@ -311,28 +327,14 @@ function CarteJoker({ couleur, icone, titre, texte, children, actif }: { couleur
 }
 
 function VueRunner({ ctx, monHotspot }: { ctx: Contexte; monHotspot: number | null }) {
-  const { props, n, confirmer, dernierEnvoi } = ctx
+  const { props, n, confirmer, dernierEnvoi, ouvrirFauxPing, centrerSur } = ctx
   const { partie, moi, now, evenements, recharger } = props
   const { occupe, erreur, lancer } = useAction()
   const jokers = jokersDispo(moi, partie)
-  const fauxEnAttente = evenements.some((e: Evenement) => e.type === 'faux' && e.joueur_id === moi.id && e.tick !== null && e.tick > n)
+  const faux = evenements.find((e: Evenement) => e.type === 'faux' && e.joueur_id === moi.id && e.tick !== null && e.tick > n)
+  const fauxEnAttente = faux !== undefined
   const resteUnPing = prochainPing(partie, now) !== null || enAvance(partie, now)
   const partageActif = dernierEnvoi !== null && Date.now() - dernierEnvoi < 20_000
-
-  const fauxPing = async () => {
-    const ok = await confirmer({
-      titre: 'Faux ping ?',
-      message: 'Au prochain ping, les chasseurs verront une fausse position au lieu de la vraie. Utilise 1 joker.',
-      confirmer: 'Envoyer un faux ping',
-      ton: 'violet',
-      icone: VenetianMask,
-    })
-    if (!ok) return
-    void lancer(async () => {
-      await jokerFaux(moi.id)
-      await recharger()
-    })
-  }
 
   const meDeclarer = async () => {
     const ok = await confirmer({
@@ -373,16 +375,23 @@ function VueRunner({ ctx, monHotspot }: { ctx: Contexte; monHotspot: number | nu
         titre={`Jokers : ${jokers}`}
         texte={
           fauxEnAttente
-            ? 'Faux ping prêt : le prochain ping montrera une fausse position.'
-            : !resteUnPing
-              ? 'Plus aucun ping avant la fin de la partie.'
-              : 'Au prochain ping, les chasseurs verront une fausse position au lieu de la vraie.'
+            ? 'Faux ping prêt : au prochain ping, les chasseurs te verront à l’endroit choisi (en violet sur ta carte).'
+            : jokers < 1
+              ? 'Plus de joker disponible.'
+              : !resteUnPing
+                ? 'Plus aucun ping avant la fin de la partie.'
+                : 'Choisis sur la carte où les chasseurs te verront au prochain ping.'
         }
         actif={fauxEnAttente}
       >
-        {!fauxEnAttente && (
-          <button className="btn btn-violet" disabled={jokers < 1 || occupe || !resteUnPing} onClick={() => void fauxPing()}>
-            {occupe ? <Spinner /> : <VenetianMask size={18} aria-hidden />} Faux ping
+        {fauxEnAttente && faux?.lat != null && faux.lng != null && (
+          <button className="btn btn-secondaire btn-petit" onClick={() => centrerSur({ lat: faux.lat as number, lng: faux.lng as number })}>
+            <LocateFixed size={18} aria-hidden /> Voir ma fausse position
+          </button>
+        )}
+        {!fauxEnAttente && jokers > 0 && (
+          <button className="btn btn-violet" disabled={occupe || !resteUnPing} onClick={ouvrirFauxPing}>
+            <VenetianMask size={18} aria-hidden /> Placer une fausse position
           </button>
         )}
       </CarteJoker>
@@ -514,6 +523,85 @@ function VueChasseur({ ctx, spectateur }: { ctx: Contexte; spectateur: boolean }
       )}
       <MessageErreur>{erreur}</MessageErreur>
     </>
+  )
+}
+
+/** Carte plein écran : le runner touche l'endroit où les chasseurs le verront au prochain ping, puis valide. */
+function ChoixFaussePosition({
+  partie,
+  moi,
+  geo,
+  recharger,
+  onFermer,
+}: {
+  partie: Partie
+  moi: Joueur
+  geo: Geoloc
+  recharger: () => Promise<void>
+  onFermer: () => void
+}) {
+  const [point, setPoint] = useState<LatLng | null>(null)
+  const { occupe, erreur, setErreur, lancer } = useAction()
+  const hotspots = useMemo<Hotspot[]>(() => partie.hotspots.map(([lat, lng]) => ({ pos: { lat, lng } })), [partie.hotspots])
+  const marqueurs = useMemo<Marqueur[]>(() => {
+    const m: Marqueur[] = []
+    if (point) m.push({ id: 'faux', pos: point, type: 'joueur', nom: moi.pseudo, detail: 'faux ping', couleur: VIOLET })
+    if (geo.position) m.push({ id: 'moi', pos: { lat: geo.position.lat, lng: geo.position.lng }, type: 'moi' })
+    return m
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [point, geo.position?.lat, geo.position?.lng, moi.pseudo])
+
+  const clic = (pos: LatLng) => {
+    if (horsZone(pos, partie)) {
+      setErreur('Choisis un endroit dans la zone de jeu.')
+      return
+    }
+    setErreur(null)
+    setPoint(pos)
+  }
+
+  const valider = () => {
+    if (!point) return
+    void lancer(async () => {
+      await jokerFaux(moi.id, point)
+      await recharger()
+      onFermer()
+    })
+  }
+
+  return (
+    <div className="ecran">
+      <Carte zone={partie.zone_poly} centreDefaut={geo.position ?? centrePartie(partie)} hotspots={hotspots} marqueurs={marqueurs} onClic={clic} recadrer={1} margeHaut={90}>
+        <div className="flottant-haut">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button className="btn-icone rond" onClick={onFermer} aria-label="Annuler">
+              <X size={22} aria-hidden />
+            </button>
+            <span className="indice">
+              <VenetianMask size={16} aria-hidden />
+              {point ? 'Touche ailleurs pour la déplacer' : 'Touche la carte pour placer ta fausse position'}
+            </span>
+          </div>
+        </div>
+      </Carte>
+      <div className="feuille">
+        <div className="feuille-titre">
+          <h2>Fausse position</h2>
+          {point && geo.position && <span>à {formatDistance(distanceM(geo.position, point))} de toi</span>}
+        </div>
+        <p className="aide" style={{ textAlign: 'left', marginTop: -8 }}>
+          Au prochain ping, les chasseurs te verront à cet endroit au lieu de ta vraie position. Utilise 1 joker.
+        </p>
+        <MessageErreur>{erreur}</MessageErreur>
+        <button className="btn btn-violet" disabled={!point || occupe} onClick={valider}>
+          {occupe ? <Spinner /> : <Check size={20} aria-hidden />}
+          {point ? 'Valider la fausse position' : 'Touche la carte pour choisir'}
+        </button>
+        <button className="btn btn-fantome" onClick={onFermer}>
+          Annuler
+        </button>
+      </div>
+    </div>
   )
 }
 

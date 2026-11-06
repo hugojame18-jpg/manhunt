@@ -101,8 +101,9 @@ export const terminerPartie = (partieId: string) => rpc('manhunt_terminer', { p_
 export const attraper = (joueurId: string) => rpc('manhunt_attraper', { p_joueur: joueurId }).then(() => undefined)
 /** Joker chasseur : ping réel immédiat du runner choisi. */
 export const jokerPing = (chasseurId: string, cibleId: string) => rpc('manhunt_joker_ping', { p_chasseur: chasseurId, p_cible: cibleId }).then(() => undefined)
-/** Joker runner : le prochain ping montrera une fausse position. */
-export const jokerFaux = (runnerId: string) => rpc('manhunt_joker_faux', { p_runner: runnerId }).then(() => undefined)
+/** Joker runner : au prochain ping, les chasseurs verront le runner à la position choisie. */
+export const jokerFaux = (runnerId: string, pos: { lat: number; lng: number }) =>
+  rpc('manhunt_joker_faux', { p_runner: runnerId, p_lat: pos.lat, p_lng: pos.lng }).then(() => undefined)
 
 export function envoyerPosition(
   joueurId: string,
